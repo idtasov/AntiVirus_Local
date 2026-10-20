@@ -478,7 +478,7 @@
  * ------------------------------------------------------------------ */
 // Must match VERSION in engine.py. If the server reports an older version, the page was
 // updated (git pull) but the Python process wasn't restarted, so new features won't work yet.
-const UI_VERSION = 6;
+const UI_VERSION = 7;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -595,18 +595,28 @@ function renderStatus(st) {
   $$(".psutil-missing").forEach(el => el.hidden = st.psutil_installed !== false);
 
   // Module toggles (only re-render if something changed, so clicks aren't lost).
-  const sig = JSON.stringify([p, st.clamav_installed, st.psutil_installed]);
+  const sig = JSON.stringify([p, st.module_settings, st.clamav_installed, st.psutil_installed, st.clamav_status]);
   if (renderStatus._mods !== sig) {
     renderStatus._mods = sig;
     $("#modules").innerHTML = MODULES.map(m => {
       const missing = m.key === "clamav" ? !st.clamav_installed : m.needsPsutil && !st.psutil_installed;
       const disabled = missing;
-      const on = p[m.key];
+      // The switch shows what you chose; the badge shows what's actually running.
+      const wanted = st.module_settings ? st.module_settings[m.cfg] : p[m.key];
+      const running = p[m.key];
+      const clam = st.clamav_status || {};
+      let badge = running ? ["ok", "On"] : ["info", "Off"];
+      let desc = esc(m.desc);
+      if (wanted && !running && !missing) {
+        if (m.key === "clamav" && ["checking", "unchecked"].includes(clam.state)) badge = ["info", "Checking…"];
+        else badge = ["warn", "Needs setup"];
+        if (m.key === "clamav" && clam.error) desc = `<span style="color:var(--warn)">${esc(clam.error)}</span>`;
+      }
       return `<div class="module">
         <div class="spacer"><div class="name">${m.name} ${disabled ? `<span class="badge info">${m.needsPsutil ? "needs psutil" : "not installed"}</span>` : ""}</div>
-        <div class="desc">${m.desc}</div></div>
-        <span class="badge ${on ? "ok" : "info"}">${on ? "On" : "Off"}</span>
-        <label class="switch"><input type="checkbox" data-module="${m.cfg}" ${on ? "checked" : ""} ${disabled ? "disabled" : ""}><span></span></label>
+        <div class="desc">${desc}</div></div>
+        <span class="badge ${badge[0]}" style="white-space:nowrap">${badge[1]}</span>
+        <label class="switch"><input type="checkbox" data-module="${m.cfg}" ${wanted ? "checked" : ""} ${disabled ? "disabled" : ""}><span></span></label>
       </div>`;
     }).join("");
   }

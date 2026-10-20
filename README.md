@@ -116,6 +116,7 @@ anything in OS and program folders unless it's an exact hash-signature match. Th
     cd "C:\Program Files\ClamAV"
     copy conf_examples\freshclam.conf.sample freshclam.conf
     notepad freshclam.conf        (delete the line that just says "Example", save)
+    mkdir database                (the folder the definitions go in; skip if it already exists)
     freshclam.exe                 (downloads the definitions, a few hundred MB)
     ```
     Then click **Re-check** next to the ClamAV setting.

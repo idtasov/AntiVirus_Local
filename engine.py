@@ -38,7 +38,7 @@ from urlcheck import check_url
 
 # Bump together with UI_VERSION in static/index.html whenever the API changes. The dashboard
 # compares the two and asks you to restart Sentinel if the page is newer than the running server.
-VERSION = 6
+VERSION = 7
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"          # config, logs, state, quarantine
@@ -1123,6 +1123,11 @@ class Engine:
             "psutil_installed": self.procmon.available(),
             "alerts": {"process": len(self.state["process_alerts"]),
                        "network": len(self.state["network_alerts"])},
+            # What the user switched on. "protection" above is what's actually running; they
+            # differ when a module needs setup (e.g. ClamAV without virus definitions).
+            "module_settings": {k: cfg[k] for k in ("realtime_enabled", "heuristics_enabled", "scan_archives",
+                                                    "scheduled_scan_enabled", "use_clamav",
+                                                    "process_monitor_enabled", "network_monitor_enabled")},
             "clamav_installed": bool(clam.get("clamscan") or clam.get("clamdscan")),
             "clamav_status": clam,
             "scan": dict(self.scan),
