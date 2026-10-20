@@ -86,6 +86,15 @@ def make_handler(engine: Engine, port: int):
                 return self._send(200, engine.quarantine.list())
             if path == "/api/detections":
                 return self._send(200, engine.detections())
+            if path == "/api/processes":
+                if not engine.procmon.available():
+                    return self._send(200, {"available": False, "processes": [], "alerts": []})
+                return self._send(200, {"available": True, "processes": engine.procmon.list_processes(),
+                                        "alerts": engine.state["process_alerts"]})
+            if path == "/api/network":
+                return self._send(200, {**engine.netmon.view(), "alerts": engine.state["network_alerts"]})
+            if path == "/api/network/log":
+                return self._send(200, engine.netmon.log_entries())
             return self._send(404, {"error": "Not found"})
 
         def do_POST(self):
@@ -109,6 +118,17 @@ def make_handler(engine: Engine, port: int):
             if path == "/api/detections/clear":
                 engine.clear_history()
                 return self._send(200, {"ok": True})
+            if path == "/api/url/check":
+                return self._send(200, engine.check_url(str(body.get("url", ""))[:4000]))
+            if path == "/api/alerts/clear":
+                return self._send(200, {"ok": engine.clear_alerts(str(body.get("kind", "")))})
+            if path == "/api/processes/control":
+                try:
+                    pid, ctime = int(body["pid"]), float(body["create_time"])
+                except (KeyError, TypeError, ValueError):
+                    return self._send(400, {"error": "pid and create_time are required"})
+                ok, msg = engine.procmon.control(pid, ctime, str(body.get("action", "")))
+                return self._send(200 if ok else 409, {"ok": ok, "message": msg})
 
             m = re.fullmatch(r"/api/detections/([0-9a-f]{12})/quarantine", path)
             if m:

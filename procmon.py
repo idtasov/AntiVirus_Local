@@ -66,8 +66,8 @@ LOLBIN_PATTERNS = [
     (re.compile(r"rundll32(\.exe)?\W.*javascript:"), "rundll32 running inline JavaScript"),
     (re.compile(r"bitsadmin(\.exe)?\W.*/transfer"), "bitsadmin used to download a file"),
 ]
-ENCODED_PS = re.compile(r"(powershell|pwsh)(\.exe)?\W.*\s-(e|en|enc|encodedcommand)\s")
-HIDDEN_PS = re.compile(r"(powershell|pwsh)(\.exe)?\W.*\s-(w|windowstyle)\s+hidden")
+ENCODED_PS = re.compile(r"(powershell|pwsh)(\.exe)?\b.*\s-(e|en|enc|encodedcommand)\s")
+HIDDEN_PS = re.compile(r"(powershell|pwsh)(\.exe)?\b.*\s-(w|windowstyle)\s+hidden")
 DOWNLOAD_RUN = re.compile(r"(iex|invoke-expression).{0,200}(downloadstring|invoke-webrequest|iwr\s|irm\s)"
                           r"|(downloadstring|invoke-webrequest|iwr\s|irm\s).{0,200}\|\s*(iex|invoke-expression)")
 
@@ -117,14 +117,14 @@ def evaluate_process(info: dict, windows: bool = IS_WINDOWS, writable_dirs: list
         if homes and exe and not any(h in exe for h in homes):
             flag(70, f"Named like the Windows process {info.get('name')} but runs from {info.get('exe')}")
         if ENCODED_PS.search(cmd):
-            flag(40, "PowerShell started with an encoded (hidden) command")
+            flag(50, "PowerShell started with an encoded (hidden) command")
         if HIDDEN_PS.search(cmd):
             flag(15, "PowerShell started with a hidden window")
         if DOWNLOAD_RUN.search(cmd):
-            flag(45, "Downloads code from the internet and runs it immediately")
+            flag(55, "Downloads code from the internet and runs it immediately")
         for pattern, why in LOLBIN_PATTERNS:
             if pattern.search(cmd):
-                flag(45, f"Built-in Windows tool misused: {why}")
+                flag(55, f"Built-in Windows tool misused: {why}")
                 break
 
     # Cross-platform: programs running straight out of temp/download folders. Installers do
@@ -279,8 +279,11 @@ class ProcessMonitor(threading.Thread):
             if abs(proc.create_time() - float(create_time)) > 0.01:
                 return False, "That process has already exited"
             name = proc.name()
-            if self.is_critical({"name": name, "pid": pid}) or pid == self.my_pid:
-                return False, f"{name} is critical to the system and can't be {action}ed"
+            if pid == self.my_pid:
+                return False, "That's Sentinel itself"
+            if self.is_critical({"name": name, "pid": pid}):
+                done = {"suspend": "suspended", "resume": "resumed", "terminate": "terminated"}.get(action, action)
+                return False, f"{name} is critical to the system and can't be {done}"
             {"suspend": proc.suspend, "resume": proc.resume, "terminate": proc.terminate}[action]()
         except KeyError:
             return False, "Unknown action"

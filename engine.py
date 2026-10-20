@@ -33,9 +33,13 @@ import zipfile
 from collections import Counter, deque
 from pathlib import Path
 
+from netmon import NetworkMonitor
+from procmon import ProcessMonitor
+from urlcheck import check_url
+
 # Bump together with UI_VERSION in static/index.html whenever the API changes. The dashboard
 # compares the two and asks you to restart Sentinel if the page is newer than the running server.
-VERSION = 4
+VERSION = 5
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"          # config, logs, state, quarantine
@@ -85,6 +89,23 @@ DEFAULT_CONFIG = {
     "scheduled_scan_enabled": False,
     "scheduled_scan_type": "quick",         # quick | full | computer
     "scheduled_interval_hours": 24,
+
+    # Process monitor (behaviour-based detection; needs psutil)
+    "process_monitor_enabled": True,
+    "process_interval_sec": 2,
+    "process_scan_executables": True,           # scan each new program's file on launch
+    "process_action": "alert",                  # alert | suspend
+    "allowlist_processes": [],                  # names or full paths never flagged
+
+    # Network monitor (needs psutil)
+    "network_monitor_enabled": True,
+    "network_interval_sec": 2,
+    "network_reverse_dns": True,                # look up host names for remote addresses
+    # Ports often used by remote-access tools, IRC bots and Tor.
+    "network_alert_ports": ["4444", "1337", "31337", "6666", "6667", "12345", "54321", "9001", "9050", "9150"],
+
+    # Web protection: flagged by the URL checker and the network monitor.
+    "blocked_domains": [],
 }
 
 # Allowed values for string settings, and min/max for numeric ones.
@@ -92,11 +113,14 @@ CHOICES = {
     "heuristic_sensitivity": {"low", "medium", "high"},
     "action_on_detect": {"quarantine", "report"},
     "scheduled_scan_type": {"quick", "full", "computer"},
+    "process_action": {"alert", "suspend"},
 }
 LIMITS = {
     "realtime_interval_sec": (1, 300),
     "max_file_size_mb": (1, 2048),
     "scheduled_interval_hours": (1, 24 * 30),
+    "process_interval_sec": (1, 60),
+    "network_interval_sec": (1, 60),
 }
 
 
@@ -816,7 +840,7 @@ class Engine:
         self._lock = threading.RLock()
         self._state_path = DATA_DIR / "state.json"
         self.state = {"files_scanned_total": 0, "threats_total": 0, "last_scan": None,
-                      "last_scheduled": 0, "detections": []}
+                      "last_scheduled": 0, "detections": [], "process_alerts": [], "network_alerts": []}
         try:
             self.state.update(json.loads(self._state_path.read_text()))
         except (OSError, ValueError):
@@ -827,6 +851,8 @@ class Engine:
         self.computer_roots = computer_roots()  # fixed drives rarely change; detect once
         self.watcher = RealtimeWatcher(self)
         self.scheduler = Scheduler(self)
+        self.procmon = ProcessMonitor(self)
+        self.netmon = NetworkMonitor(self)
 
     # -- lifecycle ---------------------------------------------------------- #
 
@@ -834,11 +860,18 @@ class Engine:
         self.events.add("info", "system", "Sentinel started")
         self.watcher.start()
         self.scheduler.start()
+        self.procmon.start()
+        self.netmon.start()
+        if not self.procmon.available():
+            self.events.add("warning", "system", "psutil isn't installed, so the process and network monitors "
+                                                 "are off. Install it with: py -m pip install psutil")
 
     def stop(self):
         self._cancel.set()
         self.watcher.stop_event.set()
         self.scheduler.stop_event.set()
+        self.procmon.stop_event.set()
+        self.netmon.stop_event.set()
         self._save_state()
 
     def _save_state(self):
@@ -1013,6 +1046,34 @@ class Engine:
         self.events.add("info", "signatures", f"Signatures reloaded: {info['hashes']} hashes, {info['patterns']} patterns")
         return info
 
+    # -- behaviour & network alerts ---------------------------------------------- #
+
+    def add_process_alert(self, alert: dict):
+        with self._lock:
+            self.state["process_alerts"] = [alert, *self.state["process_alerts"]][:300]
+            self._save_state()
+        self.events.add("threat", "process", f"Suspicious process {alert['name']} (PID {alert['pid']}), "
+                                             f"score {alert['score']} ({alert['action']})")
+
+    def add_network_alert(self, alert: dict):
+        with self._lock:
+            self.state["network_alerts"] = [alert, *self.state["network_alerts"]][:300]
+            self._save_state()
+        self.events.add(alert["level"], "network", f"{alert['process'] or 'Unknown process'} -> {alert['target']}: "
+                                                    + "; ".join(alert["reasons"]))
+
+    def clear_alerts(self, kind: str) -> bool:
+        key = {"process": "process_alerts", "network": "network_alerts"}.get(kind)
+        if not key:
+            return False
+        with self._lock:
+            self.state[key] = []
+            self._save_state()
+        return True
+
+    def check_url(self, url: str) -> dict:
+        return check_url(url, self.config.snapshot()["blocked_domains"])
+
     def clear_history(self):
         with self._lock:
             self.state["detections"] = []
@@ -1031,7 +1092,12 @@ class Engine:
                 "archives": cfg["scan_archives"],
                 "scheduled": cfg["scheduled_scan_enabled"],
                 "clamav": bool(cfg["use_clamav"] and clam),
+                "process_monitor": cfg["process_monitor_enabled"] and self.procmon.available(),
+                "network_monitor": cfg["network_monitor_enabled"] and self.netmon.available(),
             },
+            "psutil_installed": self.procmon.available(),
+            "alerts": {"process": len(self.state["process_alerts"]),
+                       "network": len(self.state["network_alerts"])},
             "clamav_installed": bool(clam),
             "scan": dict(self.scan),
             "stats": {

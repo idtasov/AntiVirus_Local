@@ -1,9 +1,11 @@
 # Sentinel: a local, private antivirus dashboard
 
 A small antivirus-style scanner with a web dashboard. It runs entirely on your own machine:
-no cloud lookups, no telemetry, no accounts. It's pure Python standard library, so there's nothing to install.
+no cloud lookups, no telemetry, no accounts. The core is pure Python standard library. One optional package,
+[psutil](https://pypi.org/project/psutil/), enables the process and network monitors:
 
 ```bash
+python3 -m pip install -r requirements.txt   # optional: process + network monitors
 python3 sentinel.py            # then open http://127.0.0.1:8765
 python3 sentinel.py --port 9000
 ```
@@ -12,6 +14,7 @@ python3 sentinel.py --port 9000
 **"Add python.exe to PATH"** in the installer. Then run it with `py` (or `python`) instead of `python3`:
 
 ```
+py -m pip install -r requirements.txt
 py sentinel.py
 py tools\make_test_files.py %USERPROFILE%\Downloads\sentinel-test
 ```
@@ -42,6 +45,10 @@ On Windows, `python3` usually opens a Microsoft Store shortcut, which gives the 
 | **Report-only mode** | Flag threats without moving them, then quarantine individual files from the Activity tab |
 | **System file protection** | In Windows / Program Files (or `/usr`, `/etc`… on Linux), only exact hash matches are auto-quarantined; other detections are reported for review |
 | **Activity log** | Detection history with reasons, plus a filterable event log |
+| **Process monitor** | Behaviour-based checks on programs as they start (Office apps launching shells, fake system processes, encoded or download-and-run PowerShell, misused built-in tools, programs running from Temp/Downloads), plus scan-on-launch. Suspend, resume or stop processes from the dashboard. Needs psutil |
+| **Network monitor** | Live upload/download graph, every connection with its program and remote host name, listening ports, a log of new connections (CSV export), and alerts for blocked domains, remote-access ports and network use from temp folders. Needs psutil |
+| **URL / phishing checker** | Offline check of a pasted link: lookalike domains (`paypa1`, `rnicrosoft`), disguised characters, `@` tricks, raw or obfuscated IPs, shorteners, risky TLDs |
+| **Blocked domains** | Your own list: flagged by the URL checker, and the network monitor alerts if any program connects to them |
 
 ## Try it with harmless test files
 
@@ -58,6 +65,9 @@ Start a **Custom scan** on that folder. If real-time protection watches `~/Downl
 ```
 sentinel.py        Web server (localhost only) + JSON API
 engine.py          Config, signatures, heuristics, scanner, quarantine, real-time watcher, scheduler
+procmon.py         Process monitor: behaviour rules, scan on launch, suspend/resume/stop
+netmon.py          Network monitor: connections, traffic rates, connection log, alerts
+urlcheck.py        Offline URL / phishing checker
 static/index.html  Dashboard (plain HTML/CSS/JS, no build step)
 signatures/        Your detection rules: *.hashes and patterns.json
 tools/             Helper scripts
@@ -126,9 +136,28 @@ WantedBy=default.target
 systemctl --user enable --now sentinel
 ```
 
+## Process monitor, network monitor and web protection
+
+**Process monitor.** Every couple of seconds Sentinel looks for programs that have just started and scores them on
+what launched them, where they run from and what their command line does. With **Settings → Process monitor →
+Suspend it**, a flagged program is frozen until you resume or stop it from the Processes tab. Core Windows processes
+and Sentinel itself can never be suspended or stopped. Add programs you trust under *Trusted programs*.
+Running Sentinel as administrator lets it see the details of, and control, other users' and system processes.
+
+**Network monitor.** This works at the connection level, like Resource Monitor or TCPView: which program talks to
+which address and port, and how much traffic flows in total. It does **not** capture packet contents the way
+Wireshark does; that needs a packet-capture driver (Npcap) and administrator rights. Remote host names come from
+reverse DNS lookups, which you can turn off in Settings so no DNS queries are sent.
+
+**URL checker.** Links are judged from their text only. They're never opened, and nothing leaves your computer.
+"No obvious warning signs" isn't proof a site is safe; keep your browser's built-in protection on too.
+
 ## Limitations
 
 - It can't block a file *before* it's opened (true on-access blocking needs a kernel driver).
   Sentinel catches files shortly after they land.
 - It runs with your user's permissions, so it can't scan or quarantine files you can't access.
+- Without a kernel driver it can't stop a program *before* it starts, see inside other programs' memory,
+  block exploits, or capture packets. The process monitor reacts within a couple of seconds of a program starting.
+  Windows Security (Defender, Controlled Folder Access, Exploit Protection, SmartScreen) covers those layers.
 - Heuristics produce false positives. Use the allowlist or lower the sensitivity if something legitimate gets flagged.

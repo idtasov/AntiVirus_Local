@@ -1,0 +1,3 @@
+# Optional: enables the process monitor and network monitor.
+# Sentinel runs without it; only those two features are disabled.
+psutil>=5.9

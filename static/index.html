@@ -12,6 +12,7 @@
     --text: #18202c; --muted: #5d6878; --accent: #2563eb; --accent-text: #fff;
     --ok: #15803d; --ok-bg: #e7f6ec; --warn: #b45309; --warn-bg: #fdf3e2;
     --bad: #b91c1c; --bad-bg: #fde8e8; --shadow: 0 1px 2px rgba(16,24,40,.06);
+    --series-down: #2a78d6; --series-up: #eb6834;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -19,6 +20,7 @@
       --text: #e6ebf2; --muted: #96a2b3; --accent: #4f8cff; --accent-text: #fff;
       --ok: #4ade80; --ok-bg: #12291c; --warn: #fbbf24; --warn-bg: #2d2412;
       --bad: #f87171; --bad-bg: #2f1616; --shadow: none;
+      --series-down: #3987e5; --series-up: #d95926;
     }
   }
   * { box-sizing: border-box; }
@@ -54,7 +56,8 @@
     main { padding: 16px; }
     .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .cols-2 { grid-template-columns: minmax(0, 1fr); }
-    .event time { min-width: 0; }
+    .event { flex-wrap: wrap; }
+    .event > time, .event > div:last-child > time { order: -1; width: 100%; }  /* time gets its own line on phones */
   }
 
   /* ---- Status hero ---- */
@@ -129,6 +132,24 @@
   .toast { position: fixed; bottom: 20px; right: 20px; left: auto; max-width: calc(100vw - 32px); background: var(--text); color: var(--bg);
            padding: 10px 16px; border-radius: 8px; opacity: 0; transform: translateY(10px); transition: .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: none; }
+
+  /* ---- Network chart: series colours validated (dataviz validator) on both panel surfaces ---- */
+  .net-chart-wrap { position: relative; }
+  #net-chart { width: 100%; height: 190px; display: block; }
+  #net-chart .grid line { stroke: var(--border); stroke-width: 1; }
+  #net-chart text { fill: var(--muted); font-size: 11px; }
+  #net-chart .end-label { fill: var(--text); font-size: 11.5px; }
+  .legend { display: flex; gap: 16px; font-size: 12.5px; color: var(--muted); }
+  .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .chart-tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border);
+               border-radius: 8px; padding: 6px 10px; font-size: 12.5px; box-shadow: var(--shadow); white-space: nowrap; }
+  .chart-tip i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .verdict { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 10px; margin: 14px 0; }
+  .verdict.bad { background: var(--bad-bg); } .verdict.warn { background: var(--warn-bg); } .verdict.ok { background: var(--ok-bg); }
+  .verdict .icon { font-size: 22px; font-weight: 700; width: 32px; text-align: center; }
+  .verdict.bad .icon { color: var(--bad); } .verdict.warn .icon { color: var(--warn); } .verdict.ok .icon { color: var(--ok); }
+  tr.flagged td { background: var(--bad-bg); }
+  .notice { background: var(--warn-bg); border-color: var(--warn); margin-bottom: 16px; }
   .update-banner { background: var(--warn-bg); border-color: var(--warn); color: var(--text); margin-bottom: 16px; }
   [hidden] { display: none !important; }
 </style>
@@ -144,6 +165,9 @@
     <button data-tab="scan">Scan</button>
     <button data-tab="quarantine">Quarantine <span class="badge info" id="nav-q">0</span></button>
     <button data-tab="activity">Activity</button>
+    <button data-tab="processes">Processes <span class="badge info" id="nav-proc">0</span></button>
+    <button data-tab="network">Network <span class="badge info" id="nav-net">0</span></button>
+    <button data-tab="web">Web protection</button>
     <button data-tab="settings">Settings</button>
   </nav>
 
@@ -257,6 +281,92 @@
       </div>
     </section>
 
+    <!-- ================= PROCESSES ================= -->
+    <section id="tab-processes" hidden>
+      <h1>Processes</h1>
+      <div class="card notice psutil-missing" hidden><b>psutil isn't installed.</b> This feature needs it. In a command prompt run <code>py -m pip install psutil</code>, then restart Sentinel.</div>
+      <div class="card">
+        <div class="row"><h2 style="margin:0">Behaviour alerts</h2><span class="spacer"></span><button class="btn sm" data-clear="process">Clear alerts</button></div>
+        <p class="muted" style="margin:6px 0 0">New programs are checked as they start: who launched them, where they run from, what their command line does, and whether their file is flagged.</p>
+        <div id="proc-alerts" style="margin-top:8px"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="row"><h2 style="margin:0">Running processes</h2><span class="muted" id="proc-count"></span><span class="spacer"></span>
+          <input type="text" id="proc-filter" placeholder="Filter by name, path, user or PID" style="max-width:280px"></div>
+        <div class="table-wrap" style="margin-top:8px"><table>
+          <thead><tr><th>Process</th><th>PID</th><th>User</th><th>Memory</th><th>Started</th><th>Status</th><th></th></tr></thead>
+          <tbody id="proc-body"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ================= NETWORK ================= -->
+    <section id="tab-network" hidden>
+      <h1>Network</h1>
+      <div class="card notice psutil-missing" hidden><b>psutil isn't installed.</b> This feature needs it. In a command prompt run <code>py -m pip install psutil</code>, then restart Sentinel.</div>
+      <div class="card notice" id="net-error" hidden></div>
+      <div class="grid cols-4">
+        <div class="card stat"><div class="label">Download</div><div class="value" id="n-down">–</div></div>
+        <div class="card stat"><div class="label">Upload</div><div class="value" id="n-up">–</div></div>
+        <div class="card stat"><div class="label">Active connections</div><div class="value" id="n-conns">–</div></div>
+        <div class="card stat"><div class="label">Listening ports</div><div class="value" id="n-listen">–</div></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="row"><h2 style="margin:0">Traffic, last 5 minutes</h2><span class="spacer"></span>
+          <div class="legend"><span><i style="background:var(--series-down)"></i>Download</span><span><i style="background:var(--series-up)"></i>Upload</span></div></div>
+        <div class="net-chart-wrap" style="margin-top:8px">
+          <svg id="net-chart" role="img" aria-label="Network traffic over the last five minutes"></svg>
+          <div class="chart-tip" id="net-tip" hidden></div>
+        </div>
+        <details style="margin-top:6px"><summary>Show as table</summary><div class="table-wrap"><table>
+          <thead><tr><th>Time</th><th>Download</th><th>Upload</th></tr></thead><tbody id="net-table"></tbody></table></div></details>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="row"><h2 style="margin:0">Network alerts</h2><span class="spacer"></span><button class="btn sm" data-clear="network">Clear alerts</button></div>
+        <div id="net-alerts" style="margin-top:8px"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="row"><h2 style="margin:0">Connections</h2><span class="muted" id="net-count"></span><span class="spacer"></span>
+          <label class="row muted" style="gap:6px"><input type="checkbox" id="net-hide-listen"> Hide listening</label>
+          <input type="text" id="net-filter" placeholder="Filter by program, address, host or port" style="max-width:280px"></div>
+        <div class="table-wrap" style="margin-top:8px"><table>
+          <thead><tr><th>Program</th><th>Protocol</th><th>Local</th><th>Remote</th><th>State</th></tr></thead>
+          <tbody id="net-body"></tbody>
+        </table></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="row"><h2 style="margin:0">Connection log</h2><span class="muted">new connections and listeners since Sentinel started</span><span class="spacer"></span>
+          <button class="btn sm" id="net-export">Export CSV</button></div>
+        <div class="table-wrap" style="margin-top:8px; max-height:420px; overflow-y:auto"><table>
+          <thead><tr><th>Time</th><th>Program</th><th>Event</th><th>Address</th><th>Host</th></tr></thead>
+          <tbody id="net-log"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ================= WEB PROTECTION ================= -->
+    <section id="tab-web" hidden>
+      <h1>Web protection</h1>
+      <div class="grid cols-2">
+        <div class="card">
+          <h2>Check a link</h2>
+          <form id="url-form" class="row" style="flex-wrap:nowrap">
+            <input type="text" id="url-input" placeholder="Paste a link from an email or message" autocomplete="off">
+            <button class="btn primary" type="submit">Check</button>
+          </form>
+          <div id="url-result"></div>
+          <p class="muted" style="font-size:12.5px">The link is checked offline from its text alone. It's never opened, and nothing is sent anywhere.
+            "No obvious warning signs" isn't a guarantee: new phishing sites can look completely normal.</p>
+        </div>
+        <div class="card">
+          <h2>Blocked domains</h2>
+          <p class="muted" style="margin-top:0">Links to these domains (and their subdomains) are flagged as dangerous, and the network monitor alerts if any program connects to them.</p>
+          <textarea id="blocked-domains" placeholder="example-phish.com" style="min-height:140px"></textarea>
+          <div class="row" style="margin-top:10px"><button class="btn primary" id="blocked-save">Save list</button><span class="muted" id="blocked-info"></span></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ================= SETTINGS ================= -->
     <section id="tab-settings" hidden>
       <h1>Settings</h1>
@@ -315,6 +425,29 @@
           </div>
 
           <div class="card">
+            <h2>Process monitor</h2>
+            <div class="field row"><label class="switch"><input type="checkbox" name="process_monitor_enabled"><span></span></label> Check new programs as they start</div>
+            <div class="field row"><label class="switch"><input type="checkbox" name="process_scan_executables"><span></span></label> Scan each new program's file</div>
+            <div class="field"><label class="title">When a suspicious process starts</label>
+              <select name="process_action">
+                <option value="alert">Alert only</option>
+                <option value="suspend">Suspend it (freeze until you resume or stop it)</option>
+              </select></div>
+            <div class="field"><label class="title">Check interval (seconds)</label><input type="number" name="process_interval_sec" min="1" max="60"></div>
+            <div class="field"><label class="title">Trusted programs</label><textarea name="allowlist_processes" data-list></textarea>
+              <div class="hint">Names (e.g. <code>myapp.exe</code>) or full paths, one per line. Never flagged.</div></div>
+          </div>
+
+          <div class="card">
+            <h2>Network monitor</h2>
+            <div class="field row"><label class="switch"><input type="checkbox" name="network_monitor_enabled"><span></span></label> Monitor connections and traffic</div>
+            <div class="field row"><label class="switch"><input type="checkbox" name="network_reverse_dns"><span></span></label> Look up host names for remote addresses</div>
+            <div class="field"><label class="title">Check interval (seconds)</label><input type="number" name="network_interval_sec" min="1" max="60"></div>
+            <div class="field"><label class="title">Alert on these remote ports</label><textarea name="network_alert_ports" data-list></textarea>
+              <div class="hint">Defaults are ports often used by remote-access tools, IRC bots and Tor.</div></div>
+          </div>
+
+          <div class="card">
             <h2>Signatures</h2>
             <p class="muted" style="margin-top:0" id="sig-info"></p>
             <p class="muted">Add hash lists as <code>signatures/*.hashes</code> (one SHA-256 per line, optional name after it) and pattern rules in <code>signatures/patterns.json</code>, then reload. You don't need to restart.</p>
@@ -337,7 +470,7 @@
  * ------------------------------------------------------------------ */
 // Must match VERSION in engine.py. If the server reports an older version, the page was
 // updated (git pull) but the Python process wasn't restarted, so new features won't work yet.
-const UI_VERSION = 4;
+const UI_VERSION = 5;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -395,6 +528,7 @@ function showTab(name) {
   $$("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   $$("main > section").forEach(s => s.hidden = s.id !== `tab-${name}`);
   if (name === "settings") loadSettings();
+  if (name === "network") loadNetwork();
   refreshTab();
 }
 
@@ -407,6 +541,8 @@ const MODULES = [
   {key: "archives", cfg: "scan_archives", name: "Archive scanning", desc: "Looks inside .zip files"},
   {key: "scheduled", cfg: "scheduled_scan_enabled", name: "Scheduled scans", desc: "Runs scans automatically"},
   {key: "clamav", cfg: "use_clamav", name: "ClamAV engine", desc: "Optional second engine (must be installed)"},
+  {key: "process_monitor", cfg: "process_monitor_enabled", name: "Process monitor", desc: "Checks programs as they start", needsPsutil: true},
+  {key: "network_monitor", cfg: "network_monitor_enabled", name: "Network monitor", desc: "Watches connections and traffic", needsPsutil: true},
 ];
 
 let lastStatus = null;
@@ -444,16 +580,22 @@ function renderStatus(st) {
   $("#s-sigs").textContent = fmtNum(st.signatures.hashes + st.signatures.patterns);
   $("#nav-q").textContent = st.stats.quarantined;
   $("#nav-q").className = `badge ${st.stats.quarantined ? "bad" : "info"}`;
+  for (const [id, n] of [["#nav-proc", st.alerts?.process || 0], ["#nav-net", st.alerts?.network || 0]]) {
+    $(id).textContent = n;
+    $(id).className = `badge ${n ? "warn" : "info"}`;
+  }
+  $$(".psutil-missing").forEach(el => el.hidden = st.psutil_installed !== false);
 
   // Module toggles (only re-render if something changed, so clicks aren't lost).
-  const sig = JSON.stringify([p, st.clamav_installed]);
+  const sig = JSON.stringify([p, st.clamav_installed, st.psutil_installed]);
   if (renderStatus._mods !== sig) {
     renderStatus._mods = sig;
     $("#modules").innerHTML = MODULES.map(m => {
-      const disabled = m.key === "clamav" && !st.clamav_installed;
+      const missing = m.key === "clamav" ? !st.clamav_installed : m.needsPsutil && !st.psutil_installed;
+      const disabled = missing;
       const on = p[m.key];
       return `<div class="module">
-        <div class="spacer"><div class="name">${m.name} ${disabled ? '<span class="badge info">not installed</span>' : ""}</div>
+        <div class="spacer"><div class="name">${m.name} ${disabled ? `<span class="badge info">${m.needsPsutil ? "needs psutil" : "not installed"}</span>` : ""}</div>
         <div class="desc">${m.desc}</div></div>
         <span class="badge ${on ? "ok" : "info"}">${on ? "On" : "Off"}</span>
         <label class="switch"><input type="checkbox" data-module="${m.cfg}" ${on ? "checked" : ""} ${disabled ? "disabled" : ""}><span></span></label>
@@ -636,6 +778,247 @@ $("#sig-reload").addEventListener("click", async () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * Shared alert helpers (process + network)
+ * ------------------------------------------------------------------ */
+// Network rates use decimal units (1 kB = 1000 B), like most network tools.
+const fmtRate = b => b < 1000 ? `${Math.round(b)} B/s` : b < 1e6 ? `${(b/1e3).toFixed(1)} kB/s` : b < 1e9 ? `${(b/1e6).toFixed(2)} MB/s` : `${(b/1e9).toFixed(2)} GB/s`;
+// Axis labels: round step values, so no trailing ".0" (500 kB/s, 1 MB/s, 1.5 MB/s).
+const fmtAxis = b => b < 1000 ? `${b} B/s` : b < 1e6 ? `${+(b/1e3).toFixed(1)} kB/s` : b < 1e9 ? `${+(b/1e6).toFixed(2)} MB/s` : `${+(b/1e9).toFixed(2)} GB/s`;
+
+$$("[data-clear]").forEach(b => b.addEventListener("click", async () => {
+  if (!confirm("Clear these alerts?")) return;
+  await api("/api/alerts/clear", {kind: b.dataset.clear});
+  refreshTab(); if (currentTab === "network") loadNetwork(); poll();
+}));
+
+// Suspend / resume / terminate buttons live in several tables; one delegated handler serves them all.
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-proc-action]");
+  if (!b) return;
+  const action = b.dataset.procAction;
+  if (action === "terminate" && !confirm(`Stop ${b.dataset.name} (PID ${b.dataset.pid})? Unsaved work in it will be lost.`)) return;
+  try {
+    toast((await api("/api/processes/control", {pid: +b.dataset.pid, create_time: +b.dataset.ctime, action})).message);
+  } catch (err) { toast(err.message); }
+  loadProcesses();
+});
+
+function procButtons(p) {
+  if (p.critical || p.self) return '<span class="muted" style="font-size:12.5px">protected</span>';
+  const attrs = `data-pid="${esc(p.pid)}" data-ctime="${esc(p.create_time)}" data-name="${esc(p.name)}"`;
+  const suspended = p.status === "stopped" || p.action === "suspended";
+  return `<span style="white-space:nowrap">
+    <button class="btn sm" data-proc-action="${suspended ? "resume" : "suspend"}" ${attrs}>${suspended ? "Resume" : "Suspend"}</button>
+    <button class="btn sm danger" data-proc-action="terminate" ${attrs}>Stop</button></span>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Processes
+ * ------------------------------------------------------------------ */
+let procData = {processes: [], alerts: []};
+async function loadProcesses() {
+  procData = await api("/api/processes");
+  const actionCls = {suspended: "ok", terminated: "ok", resumed: "info"};
+  $("#proc-alerts").innerHTML = procData.alerts.length ? procData.alerts.slice(0, 50).map(a => `
+    <div class="event"><span class="badge bad">score ${a.score}</span>
+      <div class="spacer" style="min-width:0">
+        <div><b>${esc(a.name)}</b> <span class="muted">PID ${esc(a.pid)}</span> <span class="badge ${actionCls[a.action] || "warn"}">${esc(a.action)}</span></div>
+        <div class="mono muted truncate" title="${esc(a.exe)}">${esc(a.exe || "(path hidden)")}</div>
+        <details><summary>Why</summary><ul>${a.reasons.map(r => `<li>${esc(r)}</li>`).join("")}
+          ${a.cmdline ? `<li>Command line: <span class="mono">${esc(a.cmdline)}</span></li>` : ""}
+          ${a.parent_name ? `<li>Started by: ${esc(a.parent_name)}</li>` : ""}</ul></details>
+      </div>
+      <div style="text-align:right"><time>${ago(a.ts)}</time><div style="margin-top:6px">${procButtons(a)}</div></div></div>`).join("")
+    : '<div class="empty">No suspicious processes seen</div>';
+  renderProcTable();
+}
+function renderProcTable() {
+  const q = $("#proc-filter").value.trim().toLowerCase();
+  const rows = procData.processes.filter(p => !q || `${p.name} ${p.exe} ${p.username} ${p.pid}`.toLowerCase().includes(q));
+  $("#proc-count").textContent = `${rows.length} of ${procData.processes.length}`;
+  $("#proc-body").innerHTML = rows.slice(0, 400).map(p => `
+    <tr class="${p.score ? "flagged" : ""}">
+      <td style="max-width:360px"><b>${esc(p.name)}</b>${p.score ? ` <span class="badge bad">score ${p.score}</span>` : ""}
+        <div class="mono muted" style="word-break:break-all">${esc(p.exe)}</div></td>
+      <td class="mono">${esc(p.pid)}</td>
+      <td class="muted">${esc(p.username)}</td>
+      <td class="muted">${fmtSize(p.rss || 0)}</td>
+      <td class="muted">${p.create_time ? ago(p.create_time) : ""}</td>
+      <td class="muted">${esc(p.status)}</td>
+      <td>${procButtons(p)}</td></tr>`).join("") || '<tr><td colspan="7" class="empty">No matching processes</td></tr>';
+}
+$("#proc-filter").addEventListener("input", renderProcTable);
+
+/* ------------------------------------------------------------------ *
+ * Network
+ * ------------------------------------------------------------------ */
+let netData = null;
+async function loadNetwork() {
+  netData = await api("/api/network");
+  $("#net-error").hidden = !netData.error;
+  $("#net-error").textContent = netData.error || "";
+  $("#n-down").textContent = fmtRate(netData.rate.recv);
+  $("#n-up").textContent = fmtRate(netData.rate.sent);
+  $("#n-conns").textContent = fmtNum(netData.summary.connections);
+  $("#n-listen").textContent = fmtNum(netData.summary.listening);
+  renderTrafficChart(netData.history);
+  $("#net-table").innerHTML = netData.history.slice(-20).reverse().map(([t, s, r]) =>
+    `<tr><td class="muted">${new Date(t * 1000).toLocaleTimeString()}</td><td>${fmtRate(r)}</td><td>${fmtRate(s)}</td></tr>`).join("");
+  $("#net-alerts").innerHTML = netData.alerts.length ? netData.alerts.slice(0, 50).map(a => `
+    <div class="event"><span class="badge ${a.level === "threat" ? "bad" : "warn"}">${a.level === "threat" ? "threat" : "warning"}</span>
+      <div class="spacer" style="min-width:0"><div><b>${esc(a.process || "Unknown process")}</b> ${a.pid ? `<span class="muted">PID ${esc(a.pid)}</span>` : ""}
+        ${a.kind === "listen" ? "listening on" : "→"} <span class="mono">${esc(a.target)}</span> <span class="muted">${esc(a.proto)}</span></div>
+        <ul style="margin:4px 0 0;padding-left:18px;font-size:13px">${a.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>
+      <time>${ago(a.ts)}</time></div>`).join("")
+    : '<div class="empty">No network alerts</div>';
+  renderNetTable();
+}
+function renderNetTable() {
+  if (!netData) return;
+  const q = $("#net-filter").value.trim().toLowerCase();
+  const hideListen = $("#net-hide-listen").checked;
+  const rows = netData.connections.filter(c => (!hideListen || !c.listening) &&
+    (!q || `${c.process} ${c.local} ${c.remote_ip}:${c.remote_port} ${c.host} ${c.pid}`.toLowerCase().includes(q)));
+  // Active connections first, then listeners; stable by program name.
+  rows.sort((a, b) => (a.listening - b.listening) || (a.process || "").localeCompare(b.process || ""));
+  $("#net-count").textContent = `${rows.length} of ${netData.connections.length}`;
+  $("#net-body").innerHTML = rows.slice(0, 500).map(c => `
+    <tr><td><b>${esc(c.process || "Unknown")}</b> <span class="muted">${c.pid ? `PID ${esc(c.pid)}` : ""}</span></td>
+      <td>${esc(c.proto)}</td>
+      <td class="mono">${esc(c.local)}</td>
+      <td class="mono" style="word-break:break-all">${c.remote_ip ? `${esc(c.remote_ip)}:${esc(c.remote_port)}${c.host ? `<div class="muted">${esc(c.host)}</div>` : ""}` : '<span class="muted">–</span>'}</td>
+      <td>${c.listening ? '<span class="badge info">listening</span>' : `<span class="muted">${esc(c.status)}</span>`}</td></tr>`).join("")
+    || '<tr><td colspan="5" class="empty">No matching connections</td></tr>';
+}
+$("#net-filter").addEventListener("input", renderNetTable);
+$("#net-hide-listen").addEventListener("change", renderNetTable);
+
+async function loadNetLog() {
+  const log = await api("/api/network/log");
+  $("#net-log").innerHTML = log.slice(0, 300).map(e => `
+    <tr><td class="muted" style="white-space:nowrap">${new Date(e.ts * 1000).toLocaleTimeString()}${e.existing ? '<div style="font-size:11.5px">already open</div>' : ""}</td>
+      <td><b>${esc(e.process || "Unknown")}</b> <span class="muted">${e.pid ? esc(e.pid) : ""}</span></td>
+      <td>${e.kind === "listen" ? "listening" : `connect ${esc(e.proto)}`}</td>
+      <td class="mono" style="word-break:break-all">${e.kind === "listen" ? esc(e.local) : `${esc(e.remote_ip)}:${esc(e.remote_port)}`}</td>
+      <td class="muted" style="word-break:break-all">${esc(e.host)}</td></tr>`).join("")
+    || '<tr><td colspan="5" class="empty">Nothing logged yet</td></tr>';
+}
+$("#net-export").addEventListener("click", async () => {
+  const log = await api("/api/network/log");
+  const cols = ["ts", "kind", "pid", "process", "exe", "proto", "local", "remote_ip", "remote_port", "host", "status", "existing"];
+  // Quote every field and double inner quotes (RFC 4180), so commas in paths can't break columns.
+  const cell = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = [cols.join(","), ...log.map(e => cols.map(c => cell(c === "ts" ? new Date(e.ts * 1000).toISOString() : e[c])).join(","))];
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\r\n")], {type: "text/csv"}));
+  a.download = `sentinel-connections-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+/* Traffic chart: two 2px lines on one bytes/s axis, faint grid, direct end labels in text
+ * ink beside a coloured dot, and a crosshair tooltip on hover. Drawn as plain SVG. */
+let chartGeom = null;
+function renderTrafficChart(history) {
+  const svg = $("#net-chart");
+  const W = svg.clientWidth || 600, H = 190, L = 64, T = 10, B = 22;
+  const narrow = W < 520;              // phones: no room for end labels; the legend above identifies the lines
+  const R = narrow ? 12 : 128;
+  const css = getComputedStyle(document.documentElement);
+  const colDown = css.getPropertyValue("--series-down").trim(), colUp = css.getPropertyValue("--series-up").trim();
+  const now = Date.now() / 1000, span = 300;                       // fixed 5-minute window
+  const pts = history.filter(h => h[0] >= now - span);
+  const peak = Math.max(1000, ...pts.map(h => Math.max(h[1], h[2])));
+  const step = niceStep(peak / 3), top = step * Math.ceil(peak / step);
+  const x = t => L + (W - L - R) * (1 - (now - t) / span);
+  const y = v => T + (H - T - B) * (1 - v / top);
+  const line = i => pts.map((h, k) => `${k ? "L" : "M"}${x(h[0]).toFixed(1)},${y(h[i]).toFixed(1)}`).join("");
+
+  let g = '<g class="grid">';
+  for (let v = 0; v <= top + 1e-9; v += step)
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${fmtAxis(v)}</text>`;
+  g += `</g><text x="${L}" y="${H - 4}">5 min ago</text><text x="${W - R}" y="${H - 4}" text-anchor="end">now</text>`;
+
+  let body = "";
+  if (pts.length > 1) {
+    body += `<path d="${line(2)}" fill="none" stroke="${colDown}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    body += `<path d="${line(1)}" fill="none" stroke="${colUp}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    // Direct labels at the line ends, nudged apart if they'd overlap.
+    const last = pts[pts.length - 1];
+    let yd = y(last[2]), yu = y(last[1]);
+    if (Math.abs(yd - yu) < 14) { const mid = (yd + yu) / 2; yd = mid + (yd >= yu ? 7 : -7); yu = mid + (yd >= yu ? -7 : 7); }
+    for (const [yy, col, label, v] of narrow ? [] : [[yd, colDown, "Download", last[2]], [yu, colUp, "Upload", last[1]]]) {
+      body += `<circle cx="${W - R + 10}" cy="${yy}" r="4" fill="${col}"/><text class="end-label" x="${W - R + 18}" y="${yy + 4}">${label} ${fmtRate(v)}</text>`;
+    }
+  } else {
+    body += `<text x="${(W - R + L) / 2}" y="${H / 2}" text-anchor="middle">Collecting data…</text>`;
+  }
+  body += `<g id="net-cross"></g><rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="net-hit"/>`;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = g + body;
+  chartGeom = {pts, x, y, colDown, colUp, T, B, H};
+  $("#net-hit").addEventListener("mousemove", chartHover);
+  $("#net-hit").addEventListener("mouseleave", () => { $("#net-tip").hidden = true; $("#net-cross").innerHTML = ""; });
+}
+// Round axis steps: 1, 2, 5 x 10^n bytes/s.
+function niceStep(raw) {
+  const steps = Array.from({length: 12}, (_, e) => [1, 2, 5].map(m => m * 10 ** e)).flat();
+  return steps.find(u => u >= raw) || raw;
+}
+function chartHover(ev) {
+  const {pts, x, y, colDown, colUp, T, B, H} = chartGeom;
+  if (!pts.length) return;
+  const svg = $("#net-chart"), r = svg.getBoundingClientRect();
+  const mx = (ev.clientX - r.left) * (svg.viewBox.baseVal.width / r.width);
+  const h = pts.reduce((best, p) => Math.abs(x(p[0]) - mx) < Math.abs(x(best[0]) - mx) ? p : best);
+  const cx = x(h[0]);
+  $("#net-cross").innerHTML = `<line x1="${cx}" x2="${cx}" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3"/>
+    <circle cx="${cx}" cy="${y(h[2])}" r="4" fill="${colDown}" stroke="var(--panel)" stroke-width="2"/>
+    <circle cx="${cx}" cy="${y(h[1])}" r="4" fill="${colUp}" stroke="var(--panel)" stroke-width="2"/>`;
+  const tip = $("#net-tip");
+  tip.innerHTML = `<div class="muted">${new Date(h[0] * 1000).toLocaleTimeString()}</div>
+    <div><i style="background:${colDown}"></i>Download <b>${fmtRate(h[2])}</b></div>
+    <div><i style="background:${colUp}"></i>Upload <b>${fmtRate(h[1])}</b></div>`;
+  tip.hidden = false;
+  const px = cx * r.width / svg.viewBox.baseVal.width;
+  tip.style.left = `${Math.min(px + 12, r.width - tip.offsetWidth - 4)}px`;
+  tip.style.top = "8px";
+}
+
+/* ------------------------------------------------------------------ *
+ * Web protection
+ * ------------------------------------------------------------------ */
+$("#url-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const res = await api("/api/url/check", {url: $("#url-input").value});
+  if (res.error) { $("#url-result").innerHTML = `<p class="muted">${esc(res.error)}</p>`; return; }
+  const v = {dangerous: ["bad", "✕", "Dangerous"], suspicious: ["warn", "!", "Suspicious"], no_signs: ["ok", "✓", "No obvious warning signs"]}[res.verdict];
+  $("#url-result").innerHTML = `
+    <div class="verdict ${v[0]}"><div class="icon">${v[1]}</div>
+      <div><b>${v[2]}</b> <span class="muted">score ${res.score}</span>
+        <div class="mono muted" style="word-break:break-all">${esc(res.host)}</div></div></div>
+    ${res.reasons.length ? `<ul style="padding-left:18px">${res.reasons.map(r => `<li>${esc(r.reason)} <span class="muted">(+${r.points})</span></li>`).join("")}</ul>` : ""}
+    ${res.registered_domain ? `<button class="btn sm" id="url-block" data-domain="${esc(res.registered_domain)}">Block ${esc(res.registered_domain)}</button>` : ""}`;
+});
+$("#url-result").addEventListener("click", async e => {
+  const d = e.target.dataset.domain;
+  if (!d) return;
+  const cfg = await api("/api/config");
+  if (!cfg.blocked_domains.includes(d)) await api("/api/config", {blocked_domains: [...cfg.blocked_domains, d]});
+  toast(`Blocked ${d}`); loadBlocked();
+});
+async function loadBlocked() {
+  const cfg = await api("/api/config");
+  if (document.activeElement !== $("#blocked-domains")) $("#blocked-domains").value = cfg.blocked_domains.join("\n");
+  $("#blocked-info").textContent = `${cfg.blocked_domains.length} domain(s)`;
+}
+$("#blocked-save").addEventListener("click", async () => {
+  const list = $("#blocked-domains").value.split("\n").map(s => s.trim().toLowerCase()).filter(Boolean);
+  await api("/api/config", {blocked_domains: list});
+  toast("Blocked domains saved"); loadBlocked();
+});
+
+/* ------------------------------------------------------------------ *
  * Polling loop: status every 1.5 s, the visible tab's lists every 5 s
  * ------------------------------------------------------------------ */
 async function poll() {
@@ -646,10 +1029,14 @@ function refreshTab() {
   if (currentTab === "dashboard") loadRecent();
   if (currentTab === "quarantine") loadQuarantine();
   if (currentTab === "activity") loadActivity();
+  if (currentTab === "processes") loadProcesses();
+  if (currentTab === "network") loadNetLog();
+  if (currentTab === "web") loadBlocked();
 }
 poll(); refreshTab();
 setInterval(poll, 1500);
 setInterval(refreshTab, 5000);
+setInterval(() => currentTab === "network" && loadNetwork(), 2000);  // live graph refreshes faster
 </script>
 </body>
 </html>
