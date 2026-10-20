@@ -33,6 +33,10 @@ import zipfile
 from collections import Counter, deque
 from pathlib import Path
 
+# Bump together with UI_VERSION in static/index.html whenever the API changes. The dashboard
+# compares the two and asks you to restart Sentinel if the page is newer than the running server.
+VERSION = 4
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"          # config, logs, state, quarantine
 SIG_DIR = BASE_DIR / "signatures"     # user-editable detection rules
@@ -1020,6 +1024,7 @@ class Engine:
         cfg = self.config.snapshot()
         clam = clamav_binary()
         return {
+            "version": VERSION,
             "protection": {
                 "realtime": cfg["realtime_enabled"],
                 "heuristics": cfg["heuristics_enabled"],

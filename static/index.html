@@ -129,6 +129,7 @@
   .toast { position: fixed; bottom: 20px; right: 20px; left: auto; max-width: calc(100vw - 32px); background: var(--text); color: var(--bg);
            padding: 10px 16px; border-radius: 8px; opacity: 0; transform: translateY(10px); transition: .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: none; }
+  .update-banner { background: var(--warn-bg); border-color: var(--warn); color: var(--text); margin-bottom: 16px; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -147,6 +148,10 @@
   </nav>
 
   <main>
+    <div class="card update-banner" id="update-banner" hidden>
+      <b>Sentinel was updated but is still running the old version.</b>
+      Restart it to finish: in its command window press <code>Ctrl+C</code>, run <code>py sentinel.py</code> again, then reload this page.
+    </div>
     <!-- ================= DASHBOARD ================= -->
     <section id="tab-dashboard">
       <div class="card hero" id="hero">
@@ -330,6 +335,9 @@
 /* ------------------------------------------------------------------ *
  * Small helpers
  * ------------------------------------------------------------------ */
+// Must match VERSION in engine.py. If the server reports an older version, the page was
+// updated (git pull) but the Python process wasn't restarted, so new features won't work yet.
+const UI_VERSION = 4;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -373,6 +381,10 @@ async function api(path, body) {
   return data;
 }
 
+// Surface unexpected errors on screen instead of only in the developer console.
+window.addEventListener("error", e => toast(`Something went wrong: ${e.message}`));
+window.addEventListener("unhandledrejection", e => toast(`Something went wrong: ${e.reason?.message || e.reason}`));
+
 /* ------------------------------------------------------------------ *
  * Tabs
  * ------------------------------------------------------------------ */
@@ -401,6 +413,7 @@ let lastStatus = null;
 
 function renderStatus(st) {
   lastStatus = st;
+  $("#update-banner").hidden = (st.version || 0) >= UI_VERSION;
   const p = st.protection;
 
   // Hero: overall health.
@@ -463,7 +476,7 @@ function renderStatus(st) {
   $("#last-scan").textContent = ls ? `Last: ${ls.type}, ${fmtNum(ls.files)} files, ${ls.threats} threat(s)${ls.cancelled ? " (cancelled)" : ""}` : "";
 
   // Settings-page bits that depend on status.
-  $("#computer-roots").textContent = st.computer_roots.join(", ");
+  $("#computer-roots").textContent = (st.computer_roots || []).join(", ") || "all local drives";
   $("#clam-badge").textContent = st.clamav_installed ? "installed" : "not installed";
   $("#clam-toggle").disabled = !st.clamav_installed;
   $("#sig-info").textContent = `${fmtNum(st.signatures.hashes)} hash signature(s) and ${st.signatures.patterns} pattern rule(s), loaded ${fmtTime(st.signatures.loaded_at)}.`;
@@ -485,8 +498,9 @@ $("#hero-fix").addEventListener("click", async () => {
 
 $$("[data-scan]").forEach(b => b.addEventListener("click", () => startScan(b.dataset.scan)));
 async function startScan(type, paths) {
+  const drives = (lastStatus?.computer_roots || []).join(", ") || "all local drives";
   if (type === "computer" && !confirm(
-      `Scan the whole computer (${lastStatus.computer_roots.join(", ")})?\n\n` +
+      `Scan the whole computer (${drives})?\n\n` +
       "This reads every file and can take an hour or more. You can keep using your computer " +
       "and cancel at any time. Files Sentinel isn't allowed to read are skipped.")) return;
   try {
