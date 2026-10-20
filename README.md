@@ -29,7 +29,7 @@ On Windows, `python3` usually opens a Microsoft Store shortcut, which gives the 
 | Feature | What it does |
 |---|---|
 | **Real-time protection** | Watches chosen folders and scans new or changed files once they finish writing |
-| **Quick / Full / Custom scans** | On-demand scans with live progress and cancel |
+| **Quick / Full / Computer / Custom scans** | On-demand scans with live progress and cancel. Computer scan covers every local fixed drive (`C:\`, `D:\`…) or `/` |
 | **Scheduled scans** | Quick or full scan every N hours |
 | **Hash signatures** | SHA-256 matching against `signatures/*.hashes` |
 | **Pattern rules** | Text/hex byte patterns from `signatures/patterns.json` |
@@ -39,7 +39,8 @@ On Windows, `python3` usually opens a Microsoft Store shortcut, which gives the 
 | **Quarantine** | Moves detected files into a vault, scrambled and non-executable; restore or delete them from the UI |
 | **Exclusions** | Folders, extensions and allowlisted hashes |
 | **Sensitivity levels** | Low / Medium / High heuristic thresholds |
-| **Report-only mode** | Flag threats without moving them |
+| **Report-only mode** | Flag threats without moving them, then quarantine individual files from the Activity tab |
+| **System file protection** | In Windows / Program Files (or `/usr`, `/etc`… on Linux), only exact hash matches are auto-quarantined; other detections are reported for review |
 | **Activity log** | Detection history with reasons, plus a filterable event log |
 
 ## Try it with harmless test files
@@ -75,6 +76,17 @@ Files that existed before protection was turned on become the baseline; run a qu
 
 **Quarantine** XORs the file contents before storing them with owner-only permissions. This isn't encryption.
 It just makes sure the file can't be executed or opened by accident and won't trip other scanners.
+
+## Scanning the whole computer
+
+Click **Computer scan** on the dashboard. On Windows it scans every local fixed drive, skipping network, CD and RAM drives.
+It reads every file (up to the size limit), so expect it to take a while: roughly 20–60+ minutes depending on
+the number of files and disk speed. You can keep working and cancel at any time. Files Sentinel isn't allowed to
+read (other users' files, files locked by Windows) are skipped; run it as administrator to cover more.
+
+Because heuristics can misfire, **Protect system files** (on by default) stops Sentinel from auto-quarantining
+anything in OS and program folders unless it's an exact hash-signature match. Those detections show as
+*reported* in the Activity tab, with a **Quarantine** button if you decide a file really is malicious.
 
 ## Adding real signatures
 

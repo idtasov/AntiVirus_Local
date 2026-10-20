@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -63,6 +64,9 @@ DEFAULT_CONFIG = {
 
     # What to do when something is found
     "action_on_detect": "quarantine",       # quarantine | report
+    # In OS/program folders, only exact hash matches are auto-quarantined; heuristic
+    # hits there are just reported, so a false positive can't break Windows or an app.
+    "protect_system_files": True,
 
     # Scan locations
     "quick_scan_paths": [str(HOME / "Downloads"), str(HOME / "Desktop"), str(TEMP)],
@@ -75,7 +79,7 @@ DEFAULT_CONFIG = {
 
     # Scheduled scans
     "scheduled_scan_enabled": False,
-    "scheduled_scan_type": "quick",         # quick | full
+    "scheduled_scan_type": "quick",         # quick | full | computer
     "scheduled_interval_hours": 24,
 }
 
@@ -83,7 +87,7 @@ DEFAULT_CONFIG = {
 CHOICES = {
     "heuristic_sensitivity": {"low", "medium", "high"},
     "action_on_detect": {"quarantine", "report"},
-    "scheduled_scan_type": {"quick", "full"},
+    "scheduled_scan_type": {"quick", "full", "computer"},
 }
 LIMITS = {
     "realtime_interval_sec": (1, 300),
@@ -424,6 +428,46 @@ def _norm_root(p: str) -> str:
     """Normalise an exclusion root for comparison. normcase lower-cases paths and turns
     '/' into '\\' on Windows (whose filesystem is case-insensitive) and is a no-op elsewhere."""
     return os.path.normcase(_norm(p))
+
+
+def computer_roots() -> list[str]:
+    """Roots for a whole-computer scan: every local fixed drive on Windows (C:\\, D:\\ ...),
+    or / elsewhere. Network, CD and RAM drives are left out: they're slow, or not this computer."""
+    if os.name != "nt":
+        return ["/"]
+    import ctypes
+    import string
+    DRIVE_FIXED = 3
+    drives = [f"{c}:\\" for c in string.ascii_uppercase
+              if ctypes.windll.kernel32.GetDriveTypeW(f"{c}:\\") == DRIVE_FIXED]
+    return drives or [os.environ.get("SystemDrive", "C:") + "\\"]
+
+
+def _system_roots() -> tuple[list[str], list[str]]:
+    """(protected OS/program folders, writable exceptions inside them)."""
+    if os.name == "nt":
+        env = os.environ
+        windir = env.get("SystemRoot", r"C:\Windows")
+        roots = [windir, env.get("ProgramFiles", r"C:\Program Files"),
+                 env.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                 os.path.join(env.get("ProgramData", r"C:\ProgramData"), "Microsoft")]
+        # Temp folders are writable by programs and a favourite drop spot for malware,
+        # so detections there are quarantined normally.
+        exceptions = [os.path.join(windir, "Temp")]
+    elif sys.platform == "darwin":
+        roots = ["/System", "/Library", "/Applications", "/usr", "/bin", "/sbin", "/private/etc"]
+        exceptions = []
+    else:
+        roots = ["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc", "/boot", "/opt", "/snap", "/var/lib"]
+        exceptions = []
+    return [_norm_root(r) for r in roots], [_norm_root(e) for e in exceptions]
+
+
+SYSTEM_ROOTS, SYSTEM_EXCEPTIONS = _system_roots()
+
+
+def is_system_path(path: str) -> bool:
+    return _under(path, SYSTEM_ROOTS) and not _under(path, SYSTEM_EXCEPTIONS)
 
 
 class Scanner:
@@ -776,6 +820,7 @@ class Engine:
 
         self.scan = {"running": False}
         self._cancel = threading.Event()
+        self.computer_roots = computer_roots()  # fixed drives rarely change; detect once
         self.watcher = RealtimeWatcher(self)
         self.scheduler = Scheduler(self)
 
@@ -800,7 +845,16 @@ class Engine:
 
     def handle_detection(self, det: dict, source: str):
         det["source"] = source
-        if self.config.snapshot()["action_on_detect"] == "quarantine":
+        cfg = self.config.snapshot()
+        # Exact hash matches are certain enough to act on anywhere; anything else found in
+        # an OS/program folder is only reported, so a false positive can't break the system.
+        protected = (cfg["protect_system_files"] and det["engine"] != "signature"
+                     and is_system_path(det["path"]))
+        if protected and cfg["action_on_detect"] == "quarantine":
+            det["action"] = "reported"
+            det["reasons"].append("Not quarantined: protected system location. Review it and use "
+                                  "Quarantine in the Activity tab if it's really malicious")
+        elif cfg["action_on_detect"] == "quarantine":
             entry = self.quarantine.isolate(Path(det["path"]), det)
             det["action"] = "quarantined" if entry else "quarantine failed"
             det["quarantine_id"] = entry["id"] if entry else None
@@ -829,6 +883,8 @@ class Engine:
             roots = cfg["quick_scan_paths"]
         elif kind == "full":
             roots = cfg["full_scan_paths"]
+        elif kind == "computer":
+            roots = self.computer_roots
         elif kind == "custom":
             roots = [p for p in (paths or []) if isinstance(p, str) and p.strip()]
         else:
@@ -918,6 +974,29 @@ class Engine:
         self.events.add("info" if ok else "warning", "quarantine", msg)
         return ok, msg
 
+    def quarantine_detection(self, det_id: str) -> tuple[bool, str]:
+        """Manually quarantine a file that was only reported (report-only mode or a protected location)."""
+        with self._lock:
+            det = next((d for d in self.state["detections"] if d["id"] == det_id), None)
+        if not det or det.get("action") != "reported":
+            return False, "Nothing to quarantine"
+        path = Path(det["path"])
+        try:
+            current = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as e:
+            return False, f"Can't read the file: {e}"
+        # Never move a file that isn't the one we judged (it may have been replaced or updated).
+        if current != det["sha256"]:
+            return False, "The file has changed since it was detected. Scan it again first"
+        entry = self.quarantine.isolate(path, det)
+        if not entry:
+            return False, "Quarantine failed, see the event log"
+        with self._lock:
+            det["action"], det["quarantine_id"] = "quarantined", entry["id"]
+            self._save_state()
+        self.events.add("info", "quarantine", f"Manually quarantined {path}")
+        return True, f"Quarantined {path.name}"
+
     def delete_quarantined(self, qid: str) -> bool:
         ok = self.quarantine.delete(qid)
         if ok:
@@ -961,6 +1040,7 @@ class Engine:
                            "loaded_at": self.signatures.loaded_at},
             "next_scheduled": self.next_scheduled_run(),
             "realtime_paths": cfg["realtime_paths"],
+            "computer_roots": self.computer_roots,
         }
 
     def detections(self) -> list:

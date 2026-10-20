@@ -176,8 +176,10 @@
             <div class="row">
               <button class="btn primary" data-scan="quick">Quick scan</button>
               <button class="btn" data-scan="full">Full scan</button>
+              <button class="btn" data-scan="computer">Computer scan</button>
             </div>
-            <p class="muted" style="margin:12px 0 0">Quick scans Downloads, Desktop and the temp folder. Full scans your home folder. You can change both in Settings.</p>
+            <p class="muted" style="margin:12px 0 0">Quick scans Downloads, Desktop and the temp folder. Full scans your home folder.
+              Computer scans every local drive (<span id="computer-roots"></span>) and can take an hour or more.</p>
           </div>
           <div id="scan-running" hidden style="margin-top:14px">
             <div class="row"><strong id="scan-title"></strong><span class="spacer"></span><button class="btn sm danger" id="scan-cancel">Cancel</button></div>
@@ -280,6 +282,8 @@
                 <option value="quarantine">Quarantine automatically</option>
                 <option value="report">Report only (leave the file in place)</option>
               </select></div>
+            <div class="field"><div class="row"><label class="switch"><input type="checkbox" name="protect_system_files"><span></span></label> Protect system files</div>
+              <div class="hint">In Windows, Program Files and other OS folders, only exact signature matches are quarantined. Heuristic detections there are reported for you to review, so a false positive can't break Windows or an app.</div></div>
           </div>
 
           <div class="card">
@@ -292,7 +296,7 @@
             <h2>Scheduled scans</h2>
             <div class="field row"><label class="switch"><input type="checkbox" name="scheduled_scan_enabled"><span></span></label> Run scans automatically</div>
             <div class="field"><label class="title">Scan type</label>
-              <select name="scheduled_scan_type"><option value="quick">Quick</option><option value="full">Full</option></select></div>
+              <select name="scheduled_scan_type"><option value="quick">Quick</option><option value="full">Full</option><option value="computer">Whole computer</option></select></div>
             <div class="field"><label class="title">Every (hours)</label><input type="number" name="scheduled_interval_hours" min="1" max="720"></div>
             <div class="hint" id="next-run"></div>
           </div>
@@ -459,6 +463,7 @@ function renderStatus(st) {
   $("#last-scan").textContent = ls ? `Last: ${ls.type}, ${fmtNum(ls.files)} files, ${ls.threats} threat(s)${ls.cancelled ? " (cancelled)" : ""}` : "";
 
   // Settings-page bits that depend on status.
+  $("#computer-roots").textContent = st.computer_roots.join(", ");
   $("#clam-badge").textContent = st.clamav_installed ? "installed" : "not installed";
   $("#clam-toggle").disabled = !st.clamav_installed;
   $("#sig-info").textContent = `${fmtNum(st.signatures.hashes)} hash signature(s) and ${st.signatures.patterns} pattern rule(s), loaded ${fmtTime(st.signatures.loaded_at)}.`;
@@ -480,6 +485,10 @@ $("#hero-fix").addEventListener("click", async () => {
 
 $$("[data-scan]").forEach(b => b.addEventListener("click", () => startScan(b.dataset.scan)));
 async function startScan(type, paths) {
+  if (type === "computer" && !confirm(
+      `Scan the whole computer (${lastStatus.computer_roots.join(", ")})?\n\n` +
+      "This reads every file and can take an hour or more. You can keep using your computer " +
+      "and cancel at any time. Files Sentinel isn't allowed to read are skipped.")) return;
   try {
     await api("/api/scan", {type, paths});
     toast("Scan started");
@@ -509,7 +518,8 @@ function detectionRow(d, compact) {
       <li>SHA-256: <span class="mono">${esc(d.sha256)}</span></li><li>Found by: ${esc(d.source)}</li></ul></details></td>
     <td><b>${esc(d.threat)}</b>${d.score != null ? `<div class="muted">score ${d.score}</div>` : ""}</td>
     <td>${esc(d.engine)}</td>
-    <td><span class="badge ${actionCls}">${esc(d.action)}</span></td></tr>`;
+    <td><span class="badge ${actionCls}">${esc(d.action)}</span>
+      ${d.action === "reported" ? `<div style="margin-top:6px"><button class="btn sm danger" data-quarantine="${esc(d.id)}">Quarantine</button></div>` : ""}</td></tr>`;
 }
 
 async function loadRecent() {
@@ -562,6 +572,13 @@ async function loadActivity() {
     : '<div class="empty">No events</div>';
 }
 $("#ev-filter").addEventListener("change", loadActivity);
+$("#d-body").addEventListener("click", async e => {
+  const id = e.target.dataset.quarantine;
+  if (!id || !confirm("Move this file to quarantine?\nIf it belongs to Windows or an installed program, that program may stop working until you restore it.")) return;
+  try { toast((await api(`/api/detections/${id}/quarantine`, {})).message); }
+  catch (err) { toast(err.message); }
+  loadActivity(); poll();
+});
 $("#clear-history").addEventListener("click", async () => {
   if (!confirm("Clear detection history? Quarantined files aren't affected.")) return;
   await api("/api/detections/clear", {});

@@ -110,6 +110,11 @@ def make_handler(engine: Engine, port: int):
                 engine.clear_history()
                 return self._send(200, {"ok": True})
 
+            m = re.fullmatch(r"/api/detections/([0-9a-f]{12})/quarantine", path)
+            if m:
+                ok, msg = engine.quarantine_detection(m.group(1))
+                return self._send(200 if ok else 409, {"ok": ok, "message": msg})
+
             m = re.fullmatch(r"/api/quarantine/([0-9a-f]{12})/(restore|delete)", path)
             if m:
                 qid, action = m.groups()
