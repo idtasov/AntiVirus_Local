@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
+from urllib.parse import parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from engine import BASE_DIR, Engine
@@ -40,11 +42,13 @@ def make_handler(engine: Engine, port: int):
 
         # -- helpers ------------------------------------------------------------- #
 
-        def _send(self, code: int, body, ctype: str = "application/json"):
+        def _send(self, code: int, body, ctype: str = "application/json", headers: dict | None = None):
             if not isinstance(body, bytes):
                 body = json.dumps(body).encode()
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -72,7 +76,8 @@ def make_handler(engine: Engine, port: int):
         def do_GET(self):
             if not self._host_ok():
                 return self._send(403, {"error": "Forbidden host"})
-            path = self.path.split("?", 1)[0]
+            path, _, query = self.path.partition("?")
+            params = {k: v[0] for k, v in parse_qs(query).items()}
 
             if path in ("/", "/index.html"):
                 return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
@@ -95,6 +100,19 @@ def make_handler(engine: Engine, port: int):
                 return self._send(200, {**engine.netmon.view(), "alerts": engine.state["network_alerts"]})
             if path == "/api/network/log":
                 return self._send(200, engine.netmon.log_entries())
+            if path == "/api/capture":
+                since = int(params["since"]) if params.get("since", "").isdigit() else 0
+                return self._send(200, {**engine.capture.status(), "packets": engine.capture.list_since(since)})
+            if path == "/api/capture/packet":
+                pkt = engine.capture.detail(int(params["id"])) if params.get("id", "").isdigit() else None
+                return self._send(200, pkt) if pkt else self._send(404, {"error": "Packet no longer in the buffer"})
+            if path == "/api/capture/pcap":
+                data = engine.capture.pcap_bytes()
+                if data is None:
+                    return self._send(404, {"error": "No packets captured yet"})
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                return self._send(200, data, "application/vnd.tcpdump.pcap",
+                                  {"Content-Disposition": f'attachment; filename="sentinel-capture-{stamp}.pcap"'})
             return self._send(404, {"error": "Not found"})
 
         def do_POST(self):
@@ -117,6 +135,14 @@ def make_handler(engine: Engine, port: int):
                 return self._send(200, engine.reload_signatures())
             if path == "/api/detections/clear":
                 engine.clear_history()
+                return self._send(200, {"ok": True})
+            if path == "/api/capture/start":
+                ok, msg = engine.capture.start(str(body.get("iface", "")), str(body.get("filter", ""))[:500])
+                return self._send(200 if ok else 409, {"ok": ok, "message": msg})
+            if path == "/api/capture/stop":
+                return self._send(200, {"ok": engine.capture.stop()})
+            if path == "/api/capture/clear":
+                engine.capture.clear()
                 return self._send(200, {"ok": True})
             if path == "/api/clamav/recheck":
                 return self._send(200, engine.recheck_clamav())

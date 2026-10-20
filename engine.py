@@ -31,6 +31,7 @@ import zipfile
 from collections import Counter, deque
 from pathlib import Path
 
+from capture import PacketCapture
 from clamav import ClamAV
 from netmon import NetworkMonitor
 from procmon import ProcessMonitor
@@ -38,7 +39,7 @@ from urlcheck import check_url
 
 # Bump together with UI_VERSION in static/index.html whenever the API changes. The dashboard
 # compares the two and asks you to restart Sentinel if the page is newer than the running server.
-VERSION = 7
+VERSION = 8
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"          # config, logs, state, quarantine
@@ -854,6 +855,7 @@ class Engine:
         self.scheduler = Scheduler(self)
         self.procmon = ProcessMonitor(self)
         self.netmon = NetworkMonitor(self)
+        self.capture = PacketCapture(self)   # starts only when you press Start in the Packets tab
 
     # -- lifecycle ---------------------------------------------------------- #
 
@@ -874,6 +876,7 @@ class Engine:
         self.scheduler.stop_event.set()
         self.procmon.stop_event.set()
         self.netmon.stop_event.set()
+        self.capture.stop()
         self._save_state()
 
     def _save_state(self):

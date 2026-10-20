@@ -75,6 +75,7 @@
   .btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px;
          padding: 8px 14px; font: inherit; font-weight: 500; cursor: pointer; }
   .btn:hover { background: var(--panel-2); }
+  a.btn { text-decoration: none; display: inline-block; }   /* links styled as buttons (Save .pcap) */
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
   .btn.primary:hover { filter: brightness(1.08); }
   .btn.danger { color: var(--bad); }
@@ -150,6 +151,20 @@
   .verdict.bad .icon { color: var(--bad); } .verdict.warn .icon { color: var(--warn); } .verdict.ok .icon { color: var(--ok); }
   tr.flagged td { background: var(--bad-bg); }
   .notice { background: var(--warn-bg); border-color: var(--warn); margin-bottom: 16px; }
+
+  /* ---- Packet capture ---- */
+  .cap-scroll { max-height: 460px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .cap-scroll table { font-size: 12.5px; }
+  .cap-scroll th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  .cap-scroll td { padding: 5px 8px; white-space: nowrap; }
+  .cap-scroll td.info { white-space: normal; min-width: 280px; }
+  .cap-scroll tbody tr { cursor: pointer; }
+  .cap-scroll tbody tr:hover td { background: var(--panel-2); }
+  .cap-scroll tbody tr.selected td { background: var(--accent); color: var(--accent-text); }
+  .cap-scroll tbody tr.selected .muted { color: var(--accent-text); }
+  pre.dump { background: var(--panel-2); border-radius: 8px; padding: 10px 12px; overflow: auto; max-height: 360px;
+             font-size: 12px; line-height: 1.45; margin: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .update-banner { background: var(--warn-bg); border-color: var(--warn); color: var(--text); margin-bottom: 16px; }
   [hidden] { display: none !important; }
 </style>
@@ -167,6 +182,7 @@
     <button data-tab="activity">Activity</button>
     <button data-tab="processes">Processes <span class="badge info" id="nav-proc">0</span></button>
     <button data-tab="network">Network <span class="badge info" id="nav-net">0</span></button>
+    <button data-tab="packets">Packets <span class="badge bad" id="nav-cap" hidden>REC</span></button>
     <button data-tab="web">Web protection</button>
     <button data-tab="settings">Settings</button>
   </nav>
@@ -344,6 +360,44 @@
       </div>
     </section>
 
+    <!-- ================= PACKETS ================= -->
+    <section id="tab-packets" hidden>
+      <h1>Packet capture</h1>
+      <div class="card notice" id="cap-unavailable" hidden></div>
+      <div class="card">
+        <div class="row" style="align-items:flex-end">
+          <div style="flex:1; min-width:180px"><label class="title muted" style="font-size:12.5px">Network interface</label>
+            <select id="cap-iface"></select></div>
+          <div style="flex:1; min-width:180px"><label class="title muted" style="font-size:12.5px">Capture filter (optional, BPF)</label>
+            <input type="text" id="cap-filter" placeholder="e.g. port 53  or  host 192.168.1.10"></div>
+          <button class="btn primary" id="cap-toggle">Start capture</button>
+          <button class="btn" id="cap-clear">Clear</button>
+          <a class="btn" id="cap-save" href="/api/capture/pcap" download>Save .pcap</a>
+        </div>
+        <div class="row" style="margin-top:12px"><span class="muted" id="cap-status">Not capturing</span><span class="spacer"></span><div class="chips" id="cap-protos"></div></div>
+        <p class="muted" style="font-size:12.5px; margin:10px 0 0">Only this computer's own traffic is captured. Packets stay in memory (newest 5,000) until you clear them
+          or stop Sentinel; saved .pcap files open in Wireshark. Captures can include passwords sent over unencrypted http:// connections.</p>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="row">
+          <input type="text" id="cap-dfilter" placeholder="Display filter: dns, tls, http, port 443, ip 1.2.3.4, or any text" style="flex:1">
+          <label class="row muted" style="gap:6px"><input type="checkbox" id="cap-follow" checked> Auto-scroll</label>
+          <span class="muted" id="cap-shown"></span>
+        </div>
+        <div class="cap-scroll" id="cap-scroll" style="margin-top:10px"><table>
+          <thead><tr><th>No.</th><th>Time</th><th>Source</th><th>Destination</th><th>Protocol</th><th>Length</th><th>Program</th><th>Info</th></tr></thead>
+          <tbody id="cap-body"></tbody>
+        </table></div>
+      </div>
+      <div class="card" id="cap-detail" style="margin-top:16px" hidden>
+        <div class="row"><h2 style="margin:0" id="cap-detail-title"></h2><span class="spacer"></span><button class="btn sm" id="cap-detail-close">Close</button></div>
+        <div class="grid cols-2" style="margin-top:10px">
+          <div><div class="muted" style="font-size:12.5px; margin-bottom:4px">Layers</div><pre class="dump" id="cap-layers"></pre></div>
+          <div><div class="muted" style="font-size:12.5px; margin-bottom:4px">Bytes</div><pre class="dump" id="cap-hex"></pre></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ================= WEB PROTECTION ================= -->
     <section id="tab-web" hidden>
       <h1>Web protection</h1>
@@ -478,7 +532,7 @@
  * ------------------------------------------------------------------ */
 // Must match VERSION in engine.py. If the server reports an older version, the page was
 // updated (git pull) but the Python process wasn't restarted, so new features won't work yet.
-const UI_VERSION = 7;
+const UI_VERSION = 8;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -537,6 +591,7 @@ function showTab(name) {
   $$("main > section").forEach(s => s.hidden = s.id !== `tab-${name}`);
   if (name === "settings") loadSettings();
   if (name === "network") loadNetwork();
+  if (name === "packets") loadCapture();
   refreshTab();
 }
 
@@ -1071,6 +1126,102 @@ $("#clam-recheck").addEventListener("click", async () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * Packet capture
+ * ------------------------------------------------------------------ */
+let cap = {packets: [], lastId: 0, firstTs: null, status: null, selected: null};
+async function loadCapture() {
+  const d = await api(`/api/capture?since=${cap.lastId}`);
+  cap.status = d;
+  if (d.packets.length) {
+    // The server keeps the newest 5000; if we fell behind (or it was cleared), start over.
+    if (d.packets[0].id !== cap.lastId + 1 && cap.lastId) cap.packets = [];
+    cap.packets.push(...d.packets);
+    if (cap.packets.length > 5000) cap.packets.splice(0, cap.packets.length - 5000);
+    cap.lastId = d.packets[d.packets.length - 1].id;
+    if (cap.firstTs === null) cap.firstTs = cap.packets[0].ts;
+  }
+  $("#cap-unavailable").hidden = d.available;
+  $("#cap-unavailable").textContent = d.reason || "";
+  const sel = $("#cap-iface");
+  if (!sel.options.length || sel.dataset.sig !== JSON.stringify(d.interfaces)) {
+    sel.dataset.sig = JSON.stringify(d.interfaces);
+    sel.innerHTML = d.interfaces.map(i => `<option value="${esc(i.name)}" ${i.default ? "selected" : ""}>${esc(i.description)}${i.ip ? ` (${esc(i.ip)})` : ""}</option>`).join("");
+  }
+  sel.disabled = $("#cap-filter").disabled = d.running || !d.available;
+  $("#cap-toggle").textContent = d.running ? "Stop capture" : "Start capture";
+  $("#cap-toggle").className = `btn ${d.running ? "danger" : "primary"}`;
+  $("#cap-toggle").disabled = !d.available;
+  $("#nav-cap").hidden = !d.running;
+  // Nothing to save yet: grey the download link out instead of fetching an empty file.
+  $("#cap-save").style.pointerEvents = d.kept ? "" : "none";
+  $("#cap-save").style.opacity = d.kept ? "" : ".5";
+  const dur = Math.round(d.duration || 0);
+  $("#cap-status").textContent = d.running || d.total
+    ? `${d.running ? "Capturing on" : "Stopped, was on"} ${d.iface}${d.filter ? ` (filter: ${d.filter})` : ""} · ${fmtNum(d.total)} packets · ${fmtSize(d.bytes)} · ${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`
+    : "Not capturing";
+  $("#cap-protos").innerHTML = Object.entries(d.protocols).map(([k, v]) => `<span class="badge info">${esc(k)} ${fmtNum(v)}</span>`).join("");
+  renderCapture();
+}
+
+function capMatches(p, f) {
+  if (!f) return true;
+  let m;
+  if ((m = f.match(/^port\s+(\d+)$/))) return p.sport == m[1] || p.dport == m[1];
+  if ((m = f.match(/^ip\s+(\S+)$/))) return p.src === m[1] || p.dst === m[1];
+  const protos = new Set(cap.packets.map(x => x.proto.toLowerCase()));
+  if (protos.has(f)) return p.proto.toLowerCase() === f;
+  return `${p.src} ${p.dst} ${p.sport ?? ""} ${p.dport ?? ""} ${p.proto} ${p.process || ""} ${p.info}`.toLowerCase().includes(f);
+}
+function renderCapture() {
+  const f = $("#cap-dfilter").value.trim().toLowerCase();
+  const rows = cap.packets.filter(p => capMatches(p, f));
+  const shown = rows.slice(-500);   // keep the page fast: newest 500 matches
+  $("#cap-shown").textContent = `${fmtNum(rows.length)} of ${fmtNum(cap.packets.length)}${rows.length > 500 ? " (newest 500 shown)" : ""}`;
+  const addr = (a, port) => `${esc(a)}${port != null ? `<span class="muted">:${esc(port)}</span>` : ""}`;
+  $("#cap-body").innerHTML = shown.map(p => `
+    <tr data-id="${p.id}" class="${p.id === cap.selected ? "selected" : ""}">
+      <td class="muted">${p.id}</td>
+      <td class="muted">${cap.firstTs !== null ? (p.ts - cap.firstTs).toFixed(3) : ""}</td>
+      <td class="mono">${addr(p.src, p.sport)}</td>
+      <td class="mono">${addr(p.dst, p.dport)}</td>
+      <td><span class="badge info">${esc(p.proto)}</span></td>
+      <td class="muted">${p.len}</td>
+      <td>${esc(p.process || "")}</td>
+      <td class="info">${esc(p.info)}</td></tr>`).join("")
+    || `<tr><td colspan="8" class="empty">${cap.status?.running ? "Waiting for packets…" : "Press Start capture to begin"}</td></tr>`;
+  if ($("#cap-follow").checked) $("#cap-scroll").scrollTop = $("#cap-scroll").scrollHeight;
+}
+$("#cap-dfilter").addEventListener("input", renderCapture);
+$("#cap-body").addEventListener("click", async e => {
+  const tr = e.target.closest("tr[data-id]");
+  if (!tr) return;
+  cap.selected = +tr.dataset.id;
+  $("#cap-follow").checked = false;   // don't scroll away from what you're inspecting
+  renderCapture();
+  try {
+    const d = await api(`/api/capture/packet?id=${cap.selected}`);
+    $("#cap-detail").hidden = false;
+    $("#cap-detail-title").textContent = `Packet ${d.id}: ${d.proto}, ${d.len} bytes${d.truncated ? " (first 2048 bytes kept)" : ""}`;
+    $("#cap-layers").textContent = d.layers;
+    $("#cap-hex").textContent = d.hex;
+  } catch (err) { toast(err.message); }
+});
+$("#cap-detail-close").addEventListener("click", () => { $("#cap-detail").hidden = true; cap.selected = null; renderCapture(); });
+$("#cap-toggle").addEventListener("click", async () => {
+  try {
+    if (cap.status?.running) { await api("/api/capture/stop", {}); toast("Capture stopped"); }
+    else { toast((await api("/api/capture/start", {iface: $("#cap-iface").value, filter: $("#cap-filter").value})).message); }
+  } catch (err) { toast(err.message); }
+  loadCapture();
+});
+$("#cap-clear").addEventListener("click", async () => {
+  await api("/api/capture/clear", {});
+  cap = {...cap, packets: [], lastId: 0, firstTs: null, selected: null};
+  $("#cap-detail").hidden = true;
+  loadCapture();
+});
+
+/* ------------------------------------------------------------------ *
  * Polling loop: status every 1.5 s, the visible tab's lists every 5 s
  * ------------------------------------------------------------------ */
 async function poll() {
@@ -1089,6 +1240,7 @@ poll(); refreshTab();
 setInterval(poll, 1500);
 setInterval(refreshTab, 5000);
 setInterval(() => currentTab === "network" && loadNetwork(), 2000);  // live graph refreshes faster
+setInterval(() => currentTab === "packets" && cap.status?.running && loadCapture(), 1000);
 </script>
 </body>
 </html>

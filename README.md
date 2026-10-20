@@ -48,6 +48,7 @@ On Windows, `python3` usually opens a Microsoft Store shortcut, which gives the 
 | **Process monitor** | Behaviour-based checks on programs as they start (Office apps launching shells, fake system processes, encoded or download-and-run PowerShell, misused built-in tools, programs running from Temp/Downloads), plus scan-on-launch. Suspend, resume or stop processes from the dashboard. Needs psutil |
 | **Network monitor** | Live upload/download graph, every connection with its program and remote host name, listening ports, a log of new connections (CSV export), and alerts for blocked domains, remote-access ports and network use from temp folders. Needs psutil |
 | **URL / phishing checker** | Offline check of a pasted link: lookalike domains (`paypa1`, `rnicrosoft`), disguised characters, `@` tricks, raw or obfuscated IPs, shorteners, risky TLDs |
+| **Packet capture** | Wireshark-style view of this computer's traffic via Npcap: decoded DNS questions/answers, HTTPS website names (SNI), HTTP requests, TCP flags, ARP and ICMP, matched to the program; display filter, per-packet layers and hex dump, Save as `.pcap` for Wireshark. Needs scapy (+ Npcap on Windows) |
 | **Blocked domains** | Your own list: flagged by the URL checker, and the network monitor alerts if any program connects to them |
 
 ## Try it with harmless test files
@@ -68,6 +69,8 @@ engine.py          Config, signatures, heuristics, scanner, quarantine, real-tim
 procmon.py         Process monitor: behaviour rules, scan on launch, suspend/resume/stop
 netmon.py          Network monitor: connections, traffic rates, connection log, alerts
 urlcheck.py        Offline URL / phishing checker
+capture.py         Packet capture (scapy + Npcap): decoding, program matching, .pcap export
+clamav.py          ClamAV discovery, health check, per-file and batch scanning
 static/index.html  Dashboard (plain HTML/CSS/JS, no build step)
 signatures/        Your detection rules: *.hashes and patterns.json
 tools/             Helper scripts
@@ -160,9 +163,17 @@ and Sentinel itself can never be suspended or stopped. Add programs you trust un
 Running Sentinel as administrator lets it see the details of, and control, other users' and system processes.
 
 **Network monitor.** This works at the connection level, like Resource Monitor or TCPView: which program talks to
-which address and port, and how much traffic flows in total. It does **not** capture packet contents the way
-Wireshark does; that needs a packet-capture driver (Npcap) and administrator rights. Remote host names come from
+which address and port, and how much traffic flows in total. For packet-level detail, use the Packets tab. Remote host names come from
 reverse DNS lookups, which you can turn off in Settings so no DNS queries are sent.
+
+**Packet capture (Packets tab).** Install the optional `scapy` package (`py -m pip install scapy`) and, on Windows,
+**Npcap** from [npcap.com](https://npcap.com), the capture driver Wireshark uses (keep *WinPcap API-compatible mode*
+ticked). Pick an interface, press **Start capture**, and use the display filter (`dns`, `tls`, `http`, `port 443`,
+`ip 1.2.3.4` or any text). Click a packet for its layers and bytes; **Save .pcap** opens in Wireshark.
+Only this computer's own traffic is captured (promiscuous mode is off). Packets are kept in memory, newest 5,000, and
+discarded on Clear or exit. DNS answers seen in the capture also give the Network tab real host names, and lookups of
+blocked domains raise alerts. If Npcap was installed with *Restrict to Administrators*, run Sentinel as administrator.
+Capture filters (BPF, e.g. `port 53`) work with Npcap on Windows; on Linux they need `tcpdump` installed.
 
 **URL checker.** Links are judged from their text only. They're never opened, and nothing leaves your computer.
 "No obvious warning signs" isn't proof a site is safe; keep your browser's built-in protection on too.
@@ -173,6 +184,6 @@ reverse DNS lookups, which you can turn off in Settings so no DNS queries are se
   Sentinel catches files shortly after they land.
 - It runs with your user's permissions, so it can't scan or quarantine files you can't access.
 - Without a kernel driver it can't stop a program *before* it starts, see inside other programs' memory,
-  block exploits, or capture packets. The process monitor reacts within a couple of seconds of a program starting.
+  or block exploits. The process monitor reacts within a couple of seconds of a program starting.
   Windows Security (Defender, Controlled Folder Access, Exploit Protection, SmartScreen) covers those layers.
 - Heuristics produce false positives. Use the allowlist or lower the sensitivity if something legitimate gets flagged.

@@ -1,3 +1,3 @@
-# Optional: enables the process monitor and network monitor.
-# Sentinel runs without it; only those two features are disabled.
-psutil>=5.9
+# Optional extras. Sentinel runs without them; only the features that need them are disabled.
+psutil>=5.9    # process monitor + network monitor
+scapy>=2.5     # packet capture (on Windows also install Npcap from https://npcap.com)
