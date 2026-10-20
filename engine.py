@@ -265,20 +265,46 @@ EXECUTABLE_EXTS = {".exe", ".dll", ".scr", ".com", ".pif", ".bat", ".cmd", ".msi
                    ".apk", ".app", ".elf"}
 DECOY_EXTS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf",
               ".jpg", ".jpeg", ".png", ".gif", ".mp3", ".mp4", ".mov", ".zip", ".csv"}
-SCRIPT_EXTS = {".js", ".jse", ".vbs", ".vbe", ".ps1", ".bat", ".cmd", ".sh", ".hta",
+SCRIPT_EXTS = {".js", ".mjs", ".cjs", ".jse", ".vbs", ".vbe", ".ps1", ".bat", ".cmd", ".sh", ".hta",
                ".wsf", ".py", ".html", ".htm"}
 OFFICE_EXTS = {".doc", ".docx", ".docm", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx", ".pptm"}
 EXEC_KINDS = {"PE", "ELF", "Mach-O"}
 
-# Generic indicators of obfuscated scripts: content is decoded at runtime and then executed.
+# Obfuscated-script indicators. Big minified web libraries legitimately contain base64 data,
+# regex `.exec(` calls and XMLHttpRequest, so merely seeing "decode" and "execute" words
+# somewhere in a file proves nothing. The strong rules below therefore require decoded or
+# downloaded content to be fed *directly* into an execution call within one statement,
+# e.g. eval(atob("...")), iex(...FromBase64String...), "... | base64 -d | sh".
+# Patterns run on lower-cased text.
 B64_BLOB = re.compile(rb"[A-Za-z0-9+/]{600,}={0,2}")
-DECODE_HINTS = (b"frombase64string", b"atob(", b"b64decode", b"base64 -d", b"base64 --decode",
-                b"unescape(", b"certutil -decode")
-EXEC_HINTS = (b"eval(", b"invoke-expression", b"iex(", b"exec(", b"execute(", b"| sh",
-              b"| bash", b"wscript.shell", b"shell.application")
-FETCH_HINTS = (b"downloadstring", b"downloadfile", b"invoke-webrequest", b"xmlhttp",
-               b"curl ", b"wget ")
+_DECODE = rb"(?:atob\s*\(|frombase64string|b64decode|base64\s+(?:-d|--decode)\b|unescape\s*\()"
+# Lookbehinds skip method calls and longer identifiers: `/re/.exec(s)`, `regexec(`, `$.eval(`.
+_EXEC = rb"(?:(?<![\w.$])eval|(?<![\w.$])exec|invoke-expression|(?<![\w.$-])iex|new\s+function)"
+_FETCH = rb"(?:downloadstring|downloadfile|invoke-webrequest|invoke-restmethod|(?<![\w.$-])iwr|(?<![\w.$-])irm)"
+_STMT = rb"[^;\n]{0,300}?"   # "within the same statement": no ; or newline in between
+
+DECODE_THEN_RUN = re.compile(
+    _EXEC + rb"\s*\(?" + _STMT + _DECODE                                   # eval(atob(x))
+    + rb"|" + _DECODE + _STMT + rb"\|\s*(?:iex|invoke-expression|sh|bash)\b")  # ... | iex
+FETCH_THEN_RUN = re.compile(
+    _EXEC + rb"\s*\(?" + _STMT + _FETCH                                    # iex (...).downloadstring(url)
+    + rb"|" + _FETCH + _STMT + rb"\|\s*(?:iex|invoke-expression)\b"        # iwr url | iex
+    + rb"|(?:curl|wget)\s[^;\n|]{0,300}\|\s*(?:sudo\s+)?(?:sh|bash)\b")     # curl url | sh
+# Weaker, statement-independent versions: only used for non-web scripts (PowerShell, VBS,
+# batch...), where splitting decode and execute across lines is common and libraries are rare.
+LOOSE_DECODE = re.compile(_DECODE)
+LOOSE_EXEC = re.compile(_EXEC + rb"\s*[(\s]")
+WEB_EXTS = {".js", ".mjs", ".cjs", ".html", ".htm"}
 ENCODED_PS = re.compile(rb"powershell[^\n]{0,80}\s-(e|en|enc|encodedcommand)\s", re.I)
+
+
+def has_raw_base64_blob(data: bytes) -> bool:
+    """A long base64 run that isn't a data: URI. Web files embed fonts, images and source
+    maps as `data:...;base64,<blob>`, which is normal and not a sign of hidden code."""
+    for m in B64_BLOB.finditer(data):
+        if b"base64," not in data[max(0, m.start() - 20):m.start()]:
+            return True
+    return False
 
 SAMPLE = 2 * 1024 * 1024  # only the first 2 MB are used for content heuristics (speed)
 
@@ -340,20 +366,20 @@ def analyze(path: Path, data: bytes) -> tuple[int, list[str]]:
         if ent > 7.2:
             flag(30, f"Executable has very high entropy ({ent:.2f}/8), typical of packing or encryption")
 
-    # 4. Obfuscated scripts: runtime decoding combined with dynamic execution.
+    # 4. Obfuscated scripts: hidden or downloaded content fed straight into execution.
     is_text = b"\x00" not in head[:4096]
     if is_text and (ext in SCRIPT_EXTS or ext == ""):
         low = head.lower()
-        decodes = any(h in low for h in DECODE_HINTS)
-        executes = any(h in low for h in EXEC_HINTS)
-        if B64_BLOB.search(head):
+        if has_raw_base64_blob(head):
             flag(15, "Contains a very long base64-encoded blob")
-        if decodes and executes:
-            flag(35, "Decodes hidden content at runtime and executes it")
+        if DECODE_THEN_RUN.search(low):
+            flag(35, "Decodes hidden content and immediately executes it")
+        elif ext not in WEB_EXTS and LOOSE_DECODE.search(low) and LOOSE_EXEC.search(low):
+            flag(35, "Decodes hidden content and also executes code dynamically")
         if ENCODED_PS.search(head):
             flag(35, "Launches PowerShell with an encoded command")
-        if executes and any(h in low for h in FETCH_HINTS):
-            flag(20, "Fetches remote content and executes it")
+        if FETCH_THEN_RUN.search(low):
+            flag(20, "Downloads remote code and executes it")
 
     # 5. Office macros: a common delivery vector, though plenty of legit files use them too.
     if kind == "ZIP" and ext in OFFICE_EXTS:
