@@ -22,8 +22,6 @@ import json
 import math
 import os
 import re
-import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -33,13 +31,14 @@ import zipfile
 from collections import Counter, deque
 from pathlib import Path
 
+from clamav import ClamAV
 from netmon import NetworkMonitor
 from procmon import ProcessMonitor
 from urlcheck import check_url
 
 # Bump together with UI_VERSION in static/index.html whenever the API changes. The dashboard
 # compares the two and asks you to restart Sentinel if the page is newer than the running server.
-VERSION = 5
+VERSION = 6
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"          # config, logs, state, quarantine
@@ -68,6 +67,7 @@ DEFAULT_CONFIG = {
     "heuristic_sensitivity": "medium",      # low | medium | high
     "scan_archives": True,
     "use_clamav": False,
+    "clamav_path": "",                      # folder containing clamscan, if not on PATH / default folder
     "max_file_size_mb": 100,                # larger files are skipped
 
     # What to do when something is found
@@ -437,11 +437,6 @@ def analyze(path: Path, data: bytes) -> tuple[int, list[str]]:
 # Scanner
 # --------------------------------------------------------------------------- #
 
-def clamav_binary() -> str | None:
-    """Prefer clamdscan (talks to the running daemon, fast) over clamscan (reloads DB per call)."""
-    return shutil.which("clamdscan") or shutil.which("clamscan")
-
-
 def _under(path: str, roots: list[str]) -> bool:
     """True if `path` equals or lives inside one of `roots` (roots must already be normcased)."""
     path = os.path.normcase(path)
@@ -499,13 +494,16 @@ def is_system_path(path: str) -> bool:
 
 
 class Scanner:
-    def __init__(self, signatures: Signatures):
+    def __init__(self, signatures: Signatures, clamav: ClamAV):
         self.signatures = signatures
+        self.clamav = clamav
 
-    @staticmethod
-    def prepare(cfg: dict) -> dict:
-        """Pre-compute normalised exclusion lists once per scan instead of once per file."""
+    def prepare(self, cfg: dict, clam_per_file: bool | None = None) -> dict:
+        """Pre-compute normalised exclusion lists once per scan instead of once per file.
+        clam_per_file: ask ClamAV about each file. Defaults to "only when that's fast"
+        (clamd service running); bulk scans otherwise use one ClamAV batch pass instead."""
         cfg = dict(cfg)
+        cfg["_clam_per_file"] = self.clamav.fast() if clam_per_file is None else clam_per_file
         cfg["_excl_roots"] = [_norm_root(p) for p in (str(BASE_DIR), *SKIP_ROOTS, *cfg["exclude_paths"])]
         cfg["_excl_exts"] = {("." + e.lower().lstrip(".")) for e in cfg["exclude_extensions"]}
         cfg["_allow"] = {h.lower() for h in cfg["allowlist_hashes"]}
@@ -555,11 +553,29 @@ class Scanner:
         hit = self._inspect(path, data, sha, cfg)
         if hit is None and cfg["scan_archives"] and data[:4] == b"PK\x03\x04":
             hit = self._scan_zip(data, cfg)
-        if hit is None and cfg["use_clamav"]:
-            hit = self._clamav(path)
+        if hit is None and cfg["use_clamav"] and cfg["_clam_per_file"]:
+            found = self.clamav.scan_file(str(path))
+            if found:
+                hit = ("clamav", found[1], None, ["Flagged by ClamAV"])
         if hit is None:
             return None
+        return self._detection(path, data, sha, hit)
 
+    def clamav_detection(self, path: Path, threat: str, cfg: dict) -> dict | None:
+        """Build a detection for a file ClamAV's batch pass flagged (honours the allowlist)."""
+        try:
+            if path.is_symlink() or not path.is_file():
+                return None
+            data = path.read_bytes()
+        except OSError:
+            return None
+        sha = hashlib.sha256(data).hexdigest()
+        if sha in cfg["_allow"]:
+            return None
+        return self._detection(path, data, sha, ("clamav", threat, None, ["Flagged by ClamAV"]))
+
+    @staticmethod
+    def _detection(path: Path, data: bytes, sha: str, hit: tuple) -> dict:
         engine, threat, score, reasons = hit
         return {
             "id": uuid.uuid4().hex[:12],
@@ -608,22 +624,6 @@ class Scanner:
             if hit:
                 engine, threat, score, reasons = hit
                 return (engine, threat, score, [f"Inside archive: {info.filename}", *reasons])
-        return None
-
-    def _clamav(self, path: Path):
-        exe = clamav_binary()
-        if not exe:
-            return None
-        try:
-            out = subprocess.run([exe, "--no-summary", "--stdout", str(path)],
-                                 capture_output=True, text=True, timeout=120)
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        if out.returncode == 1:  # 1 = virus found, 0 = clean, 2 = error
-            for line in out.stdout.splitlines():
-                if line.endswith(" FOUND"):
-                    name = line.rsplit(":", 1)[-1].removesuffix(" FOUND").strip()
-                    return ("clamav", name, None, ["Flagged by ClamAV"])
         return None
 
 
@@ -757,7 +757,7 @@ class RealtimeWatcher(threading.Thread):
         self.watch_key = None                 # detects changes to the watch list
 
     def _snapshot(self, cfg: dict) -> dict:
-        prepared = Scanner.prepare(cfg)
+        prepared = self.engine.scanner.prepare(cfg)
         current = {}
         for path in self.engine.scanner.iter_files(cfg["realtime_paths"], prepared, self.stop_event):
             try:
@@ -834,7 +834,8 @@ class Engine:
         self.config = Config(DATA_DIR / "config.json")
         self.events = EventLog(DATA_DIR / "events.jsonl")
         self.signatures = Signatures()
-        self.scanner = Scanner(self.signatures)
+        self.clamav = ClamAV(self.events)
+        self.scanner = Scanner(self.signatures, self.clamav)
         self.quarantine = Quarantine(self.events)
 
         self._lock = threading.RLock()
@@ -858,6 +859,7 @@ class Engine:
 
     def start(self):
         self.events.add("info", "system", "Sentinel started")
+        self.clamav.status(self.config.snapshot()["clamav_path"])   # start the ClamAV health check
         self.watcher.start()
         self.scheduler.start()
         self.procmon.start()
@@ -905,7 +907,9 @@ class Engine:
                         detection_id=det["id"])
 
     def scan_single(self, path: str, source: str):
-        cfg = Scanner.prepare(self.config.snapshot())
+        # Single files (real-time protection) may use slow clamscan: it's one file at a time
+        # on a background thread, and catching a fresh download matters most.
+        cfg = self.scanner.prepare(self.config.snapshot(), clam_per_file=True)
         det = self.scanner.scan_file(Path(path), cfg)
         with self._lock:
             self.state["files_scanned_total"] += 1
@@ -946,7 +950,8 @@ class Engine:
         return False
 
     def _run_scan(self, kind: str, roots: list, cfg: dict):
-        prepared = Scanner.prepare(cfg)
+        prepared = self.scanner.prepare(cfg)
+        flagged = set()
         try:
             for path in self.scanner.iter_files(roots, prepared, self._cancel):
                 if self._cancel.is_set():
@@ -955,8 +960,25 @@ class Engine:
                 det = self.scanner.scan_file(Path(path), prepared)
                 self.scan["files"] += 1
                 if det:
+                    flagged.add(det["path"])
                     self.scan["threats"] += 1
                     self.handle_detection(det, f"{kind} scan")
+            # Without the clamd service, ClamAV gets one batch pass over the same folders,
+            # so its virus database is loaded once instead of once per file.
+            if (cfg["use_clamav"] and not prepared["_clam_per_file"] and self.clamav.ready()
+                    and not self._cancel.is_set()):
+                self.scan["current"] = "ClamAV pass: loading virus definitions, then scanning…"
+                excl = [str(BASE_DIR), *([] if os.name == "nt" else SKIP_ROOTS),
+                        *(_norm(p) for p in cfg["exclude_paths"])]
+                for fpath, threat in self.clamav.scan_many([_norm(r) for r in roots], cfg["max_file_size_mb"],
+                                                           excl, self._cancel):
+                    self.scan["current"] = f"ClamAV pass: {fpath}"
+                    if fpath in flagged or self.scanner.is_excluded(fpath, prepared):
+                        continue
+                    det = self.scanner.clamav_detection(Path(fpath), threat, prepared)
+                    if det:
+                        self.scan["threats"] += 1
+                        self.handle_detection(det, f"{kind} scan (ClamAV)")
         finally:
             cancelled = self._cancel.is_set()
             summary = {"type": kind, "source": self.scan["source"], "started": self.scan["started"],
@@ -1071,6 +1093,9 @@ class Engine:
             self._save_state()
         return True
 
+    def recheck_clamav(self) -> dict:
+        return self.clamav.recheck(self.config.snapshot()["clamav_path"])
+
     def check_url(self, url: str) -> dict:
         return check_url(url, self.config.snapshot()["blocked_domains"])
 
@@ -1083,7 +1108,7 @@ class Engine:
 
     def status(self) -> dict:
         cfg = self.config.snapshot()
-        clam = clamav_binary()
+        clam = self.clamav.status(cfg["clamav_path"])
         return {
             "version": VERSION,
             "protection": {
@@ -1091,14 +1116,15 @@ class Engine:
                 "heuristics": cfg["heuristics_enabled"],
                 "archives": cfg["scan_archives"],
                 "scheduled": cfg["scheduled_scan_enabled"],
-                "clamav": bool(cfg["use_clamav"] and clam),
+                "clamav": bool(cfg["use_clamav"] and clam.get("state") == "ok"),
                 "process_monitor": cfg["process_monitor_enabled"] and self.procmon.available(),
                 "network_monitor": cfg["network_monitor_enabled"] and self.netmon.available(),
             },
             "psutil_installed": self.procmon.available(),
             "alerts": {"process": len(self.state["process_alerts"]),
                        "network": len(self.state["network_alerts"])},
-            "clamav_installed": bool(clam),
+            "clamav_installed": bool(clam.get("clamscan") or clam.get("clamdscan")),
+            "clamav_status": clam,
             "scan": dict(self.scan),
             "stats": {
                 "files_scanned_total": self.state["files_scanned_total"],

@@ -239,7 +239,7 @@ class ProcessMonitor(threading.Thread):
         key = (exe, st.st_mtime_ns, st.st_size)
         if key not in self.exe_cache:
             scanner = self.engine.scanner
-            prepared = scanner.prepare(cfg)
+            prepared = scanner.prepare(cfg)   # ClamAV only if clamd makes it fast: launches must not wait
             self.exe_cache[key] = (None if scanner.is_excluded(exe, prepared)
                                    else scanner.scan_file(Path(exe), prepared))
             if len(self.exe_cache) > 5000:

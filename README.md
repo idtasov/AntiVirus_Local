@@ -106,8 +106,22 @@ anything in OS and program folders unless it's an exact hash-signature match. Th
   ```json
   {"name": "My.Rule", "strings": ["some text"], "hex": ["deadbeef"], "match": "any"}
   ```
-- **ClamAV** (recommended for real-world coverage): `sudo apt install clamav clamav-daemon && sudo freshclam`,
-  then enable "Use ClamAV engine" in Settings.
+- **ClamAV** (recommended for real-world coverage): install it, download its virus definitions, then enable
+  "Use ClamAV engine" in Settings. The badge next to it should say **working**; if not, the text under it says why.
+  - **Linux:** `sudo apt install clamav clamav-daemon && sudo freshclam`
+  - **Windows:** install the `.msi` from [clamav.net/downloads](https://www.clamav.net/downloads) (it goes to
+    `C:\Program Files\ClamAV`, which Sentinel checks automatically). ClamAV won't scan until it has virus
+    definitions, so in a command prompt **run as administrator**:
+    ```
+    cd "C:\Program Files\ClamAV"
+    copy conf_examples\freshclam.conf.sample freshclam.conf
+    notepad freshclam.conf        (delete the line that just says "Example", save)
+    freshclam.exe                 (downloads the definitions, a few hundred MB)
+    ```
+    Then click **Re-check** next to the ClamAV setting.
+  - **How Sentinel uses it:** if the clamd background service is running, every file is checked as it's scanned.
+    Otherwise Sentinel runs one ClamAV pass after each scan (ClamAV takes 10-30 s to load its definitions, too slow
+    to repeat per file), and real-time protection checks new files one at a time.
 
 ## Security of the dashboard
 

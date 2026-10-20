@@ -391,6 +391,14 @@
               </select></div>
             <div class="field row"><label class="switch"><input type="checkbox" name="scan_archives"><span></span></label> Scan inside .zip archives</div>
             <div class="field row"><label class="switch"><input type="checkbox" name="use_clamav" id="clam-toggle"><span></span></label> Use ClamAV engine <span class="badge info" id="clam-badge"></span></div>
+            <div class="field">
+              <div class="hint" id="clam-status" style="margin-top:0"></div>
+              <div class="row" style="margin-top:8px; flex-wrap:nowrap">
+                <input type="text" name="clamav_path" placeholder="ClamAV folder (optional), e.g. C:\Program Files\ClamAV">
+                <button type="button" class="btn sm" id="clam-recheck" style="white-space:nowrap">Re-check</button>
+              </div>
+              <div class="hint">Only needed if ClamAV is installed somewhere unusual. Save settings after changing it.</div>
+            </div>
             <div class="field"><label class="title">Skip files larger than (MB)</label><input type="number" name="max_file_size_mb" min="1" max="2048"></div>
             <div class="field"><label class="title">When a threat is found</label>
               <select name="action_on_detect">
@@ -470,7 +478,7 @@
  * ------------------------------------------------------------------ */
 // Must match VERSION in engine.py. If the server reports an older version, the page was
 // updated (git pull) but the Python process wasn't restarted, so new features won't work yet.
-const UI_VERSION = 5;
+const UI_VERSION = 6;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -619,8 +627,7 @@ function renderStatus(st) {
 
   // Settings-page bits that depend on status.
   $("#computer-roots").textContent = (st.computer_roots || []).join(", ") || "all local drives";
-  $("#clam-badge").textContent = st.clamav_installed ? "installed" : "not installed";
-  $("#clam-toggle").disabled = !st.clamav_installed;
+  renderClam(st);
   $("#sig-info").textContent = `${fmtNum(st.signatures.hashes)} hash signature(s) and ${st.signatures.patterns} pattern rule(s), loaded ${fmtTime(st.signatures.loaded_at)}.`;
   $("#next-run").textContent = st.next_scheduled ? `Next scheduled scan: ${fmtTime(st.next_scheduled)}` : "";
 }
@@ -1016,6 +1023,41 @@ $("#blocked-save").addEventListener("click", async () => {
   const list = $("#blocked-domains").value.split("\n").map(s => s.trim().toLowerCase()).filter(Boolean);
   await api("/api/config", {blocked_domains: list});
   toast("Blocked domains saved"); loadBlocked();
+});
+
+/* ------------------------------------------------------------------ *
+ * ClamAV status (Settings)
+ * ------------------------------------------------------------------ */
+function renderClam(st) {
+  const c = st.clamav_status || {};
+  const sig = JSON.stringify([c, st.clamav_installed]);
+  if (renderClam._sig === sig) return;          // avoid re-rendering identical content every poll
+  renderClam._sig = sig;
+  const [cls, label] = {ok: ["ok", "working"], error: ["warn", "found, not working"], not_found: ["info", "not found"]}[c.state]
+    || ["info", "checking…"];
+  $("#clam-badge").className = `badge ${cls}`;
+  $("#clam-badge").textContent = label;
+  $("#clam-toggle").disabled = !st.clamav_installed;
+  const prog = esc(c.clamscan || c.clamdscan || "");
+  let html;
+  if (c.state === "ok") {
+    const defs = c.db_version ? `virus definitions version ${esc(c.db_version)}, ${esc(c.db_date)}` : "custom virus definitions loaded";
+    html = `<b>ClamAV ${esc(c.version)}</b>, ${defs}<br>Program: <code>${prog}</code><br>
+      Mode: ${c.daemon ? "clamd service: every file is checked as it's scanned"
+                       : "one ClamAV pass after each scan (start the clamd service to check every file as it's scanned)"}`;
+  } else if (c.state === "error") {
+    html = `<b>Found, but not working:</b> ${esc(c.error)}<br>Program: <code>${prog}</code>`;
+  } else if (c.state === "not_found") {
+    html = `<b>Not found.</b> Looked on PATH and in: ${(c.searched || []).filter(x => x !== "PATH").map(x => `<code>${esc(x)}</code>`).join(", ")}.`;
+  } else {
+    html = "Checking ClamAV. This can take up to a minute while it loads its virus definitions.";
+  }
+  $("#clam-status").innerHTML = html;
+}
+$("#clam-recheck").addEventListener("click", async () => {
+  await api("/api/clamav/recheck", {});
+  toast("Checking ClamAV…");
+  poll();
 });
 
 /* ------------------------------------------------------------------ *

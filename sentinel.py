@@ -118,6 +118,8 @@ def make_handler(engine: Engine, port: int):
             if path == "/api/detections/clear":
                 engine.clear_history()
                 return self._send(200, {"ok": True})
+            if path == "/api/clamav/recheck":
+                return self._send(200, engine.recheck_clamav())
             if path == "/api/url/check":
                 return self._send(200, engine.check_url(str(body.get("url", ""))[:4000]))
             if path == "/api/alerts/clear":
