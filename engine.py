@@ -385,12 +385,19 @@ def clamav_binary() -> str | None:
 
 
 def _under(path: str, roots: list[str]) -> bool:
-    """True if `path` equals or lives inside one of `roots`."""
+    """True if `path` equals or lives inside one of `roots` (roots must already be normcased)."""
+    path = os.path.normcase(path)
     return any(path == r or path.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
 
 
 def _norm(p: str) -> str:
     return os.path.abspath(os.path.expanduser(p))
+
+
+def _norm_root(p: str) -> str:
+    """Normalise an exclusion root for comparison. normcase lower-cases paths and turns
+    '/' into '\\' on Windows (whose filesystem is case-insensitive) and is a no-op elsewhere."""
+    return os.path.normcase(_norm(p))
 
 
 class Scanner:
@@ -401,7 +408,7 @@ class Scanner:
     def prepare(cfg: dict) -> dict:
         """Pre-compute normalised exclusion lists once per scan instead of once per file."""
         cfg = dict(cfg)
-        cfg["_excl_roots"] = [str(BASE_DIR), *SKIP_ROOTS, *(_norm(p) for p in cfg["exclude_paths"])]
+        cfg["_excl_roots"] = [_norm_root(p) for p in (str(BASE_DIR), *SKIP_ROOTS, *cfg["exclude_paths"])]
         cfg["_excl_exts"] = {("." + e.lower().lstrip(".")) for e in cfg["exclude_extensions"]}
         cfg["_allow"] = {h.lower() for h in cfg["allowlist_hashes"]}
         cfg["_max_bytes"] = cfg["max_file_size_mb"] * 1024 * 1024

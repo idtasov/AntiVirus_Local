@@ -8,6 +8,17 @@ python3 sentinel.py            # then open http://127.0.0.1:8765
 python3 sentinel.py --port 9000
 ```
 
+**Windows:** install Python 3.9+ from [python.org](https://www.python.org/downloads/) and tick
+**"Add python.exe to PATH"** in the installer. Then run it with `py` (or `python`) instead of `python3`:
+
+```
+py sentinel.py
+py tools\make_test_files.py %USERPROFILE%\Downloads\sentinel-test
+```
+
+On Windows, `python3` usually opens a Microsoft Store shortcut, which gives the error
+*"Python was not found; run without arguments to install from the Microsoft Store"*.
+
 > **Scope:** Sentinel is a learning project and a useful extra layer, not a replacement for a
 > maintained commercial or open-source antivirus. Its built-in signatures are only test entries,
 > so its real strength comes from the heuristics, the optional ClamAV engine, and any hash feeds
