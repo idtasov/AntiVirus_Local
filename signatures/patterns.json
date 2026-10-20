@@ -1,0 +1,7 @@
+[
+  {
+    "name": "Sentinel.Test.PatternRule",
+    "strings": ["SENTINEL-HARMLESS-PATTERN-TEST"],
+    "match": "any"
+  }
+]

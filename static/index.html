@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'%3E%3Cpath d='M12 2 4 5v6c0 5 3.4 9.3 8 11 4.6-1.7 8-6 8-11V5l-8-3z'/%3E%3C/svg%3E">
+<style>
+  /* ---- Theme tokens: light by default, dark when the OS prefers it ---- */
+  :root {
+    --bg: #f4f6f9; --panel: #ffffff; --panel-2: #f0f2f6; --border: #dde2ea;
+    --text: #18202c; --muted: #5d6878; --accent: #2563eb; --accent-text: #fff;
+    --ok: #15803d; --ok-bg: #e7f6ec; --warn: #b45309; --warn-bg: #fdf3e2;
+    --bad: #b91c1c; --bad-bg: #fde8e8; --shadow: 0 1px 2px rgba(16,24,40,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f141b; --panel: #171e27; --panel-2: #1e2732; --border: #2a3542;
+      --text: #e6ebf2; --muted: #96a2b3; --accent: #4f8cff; --accent-text: #fff;
+      --ok: #4ade80; --ok-bg: #12291c; --warn: #fbbf24; --warn-bg: #2d2412;
+      --bad: #f87171; --bad-bg: #2f1616; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+
+  /* ---- Layout: sidebar nav + main content; nav becomes a top bar on phones ---- */
+  .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  nav { background: var(--panel); border-right: 1px solid var(--border); padding: 20px 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; padding: 0 8px 20px; }
+  nav button { display: flex; width: 100%; align-items: center; gap: 10px; padding: 9px 10px; margin-bottom: 2px;
+               background: none; border: 0; border-radius: 8px; color: var(--muted); font: inherit; cursor: pointer; text-align: left; }
+  nav button:hover { background: var(--panel-2); color: var(--text); }
+  nav button.active { background: var(--panel-2); color: var(--text); font-weight: 600; }
+  nav .badge { margin-left: auto; }
+  main { padding: 28px; max-width: 1100px; width: 100%; min-width: 0; }
+  h1 { font-size: 22px; margin: 0 0 18px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .grid { display: grid; gap: 16px; }
+  .grid > * { min-width: 0; }  /* let long paths truncate instead of widening the column */
+  .cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .cols-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; box-shadow: var(--shadow); }
+  .muted { color: var(--muted); }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  @media (max-width: 820px) {
+    .app { grid-template-columns: 1fr; }
+    nav { display: flex; gap: 4px; overflow-x: auto; padding: 10px 16px; border-right: 0; border-bottom: 1px solid var(--border); }
+    nav .brand { padding: 0 8px 0 0; }
+    nav button { width: auto; white-space: nowrap; }
+    main { padding: 16px; }
+    .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cols-2 { grid-template-columns: minmax(0, 1fr); }
+    .event time { min-width: 0; }
+  }
+
+  /* ---- Status hero ---- */
+  .hero { display: flex; align-items: center; gap: 18px; padding: 22px; }
+  .hero .shield { width: 64px; height: 64px; flex: none; border-radius: 16px; display: grid; place-items: center; }
+  .hero.ok .shield { background: var(--ok-bg); color: var(--ok); }
+  .hero.warn .shield { background: var(--warn-bg); color: var(--warn); }
+  .hero.bad .shield { background: var(--bad-bg); color: var(--bad); }
+  .hero h2 { font-size: 19px; margin: 0 0 2px; }
+
+  .stat .label { color: var(--muted); font-size: 12.5px; }
+  .stat .value { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* ---- Controls ---- */
+  .btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px;
+         padding: 8px 14px; font: inherit; font-weight: 500; cursor: pointer; }
+  .btn:hover { background: var(--panel-2); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.danger { color: var(--bad); }
+  .btn.sm { padding: 4px 10px; font-size: 13px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font: inherit; }
+  textarea { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; min-height: 76px; resize: vertical; }
+
+  /* Toggle switch built from a checkbox */
+  .switch { position: relative; width: 40px; height: 22px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; background: var(--border); border-radius: 22px; cursor: pointer; transition: .15s; }
+  .switch span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .15s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::before { transform: translateX(18px); }
+  .switch input:disabled + span { opacity: .4; cursor: not-allowed; }
+
+  .module { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+  .module:first-of-type { border-top: 0; }
+  .module .name { font-weight: 600; }
+  .module .desc { color: var(--muted); font-size: 13px; }
+
+  .badge { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.info { background: var(--panel-2); color: var(--muted); }
+
+  .progress { height: 6px; background: var(--panel-2); border-radius: 6px; overflow: hidden; }
+  .progress div { height: 100%; width: 35%; background: var(--accent); border-radius: 6px; animation: slide 1.2s infinite ease-in-out; }
+  @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+  .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 8px; border-top: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12.5px; border-top: 0; }
+  .table-wrap { overflow-x: auto; }
+  td.path { max-width: 380px; word-break: break-all; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  details ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+
+  .event { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+  .event:first-child { border-top: 0; }
+  .event > .badge { align-self: flex-start; }
+  .event time { color: var(--muted); font-size: 12.5px; white-space: nowrap; min-width: 128px; }
+  .empty { color: var(--muted); padding: 18px 0; text-align: center; }
+
+  .field { margin-bottom: 14px; }
+  .field label.title { display: block; font-weight: 600; margin-bottom: 4px; }
+  .field .hint { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+  .savebar { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0; display: flex; gap: 10px; justify-content: flex-end; }
+
+  .toast { position: fixed; bottom: 20px; right: 20px; left: auto; max-width: calc(100vw - 32px); background: var(--text); color: var(--bg);
+           padding: 10px 16px; border-radius: 8px; opacity: 0; transform: translateY(10px); transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: none; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav>
+    <div class="brand">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.4 9.3 8 11 4.6-1.7 8-6 8-11V5l-8-3z"/></svg>
+      Sentinel
+    </div>
+    <button data-tab="dashboard" class="active">Dashboard</button>
+    <button data-tab="scan">Scan</button>
+    <button data-tab="quarantine">Quarantine <span class="badge info" id="nav-q">0</span></button>
+    <button data-tab="activity">Activity</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+
+  <main>
+    <!-- ================= DASHBOARD ================= -->
+    <section id="tab-dashboard">
+      <div class="card hero" id="hero">
+        <div class="shield"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.4 9.3 8 11 4.6-1.7 8-6 8-11V5l-8-3z"/><path id="hero-mark" d="m8.5 12 2.5 2.5 4.5-5"/></svg></div>
+        <div class="spacer">
+          <h2 id="hero-title">Loading…</h2>
+          <div class="muted" id="hero-sub"></div>
+        </div>
+        <button class="btn primary" id="hero-fix" hidden>Turn on</button>
+      </div>
+
+      <div class="grid cols-4" style="margin-top:16px">
+        <div class="card stat"><div class="label">Files scanned</div><div class="value" id="s-files">–</div></div>
+        <div class="card stat"><div class="label">Threats found</div><div class="value" id="s-threats">–</div></div>
+        <div class="card stat"><div class="label">In quarantine</div><div class="value" id="s-quar">–</div></div>
+        <div class="card stat"><div class="label">Signatures</div><div class="value" id="s-sigs">–</div></div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:16px">
+        <div class="card">
+          <h2>Protection modules</h2>
+          <div id="modules"></div>
+        </div>
+        <div class="card">
+          <div class="row"><h2 style="margin:0">Scan</h2><span class="spacer"></span><span class="muted" id="last-scan"></span></div>
+          <div id="scan-idle" style="margin-top:14px">
+            <div class="row">
+              <button class="btn primary" data-scan="quick">Quick scan</button>
+              <button class="btn" data-scan="full">Full scan</button>
+            </div>
+            <p class="muted" style="margin:12px 0 0">Quick scans Downloads, Desktop and the temp folder. Full scans your home folder. You can change both in Settings.</p>
+          </div>
+          <div id="scan-running" hidden style="margin-top:14px">
+            <div class="row"><strong id="scan-title"></strong><span class="spacer"></span><button class="btn sm danger" id="scan-cancel">Cancel</button></div>
+            <div class="progress" style="margin:10px 0"><div></div></div>
+            <div class="row muted"><span id="scan-files"></span>·<span id="scan-threats"></span>·<span id="scan-elapsed"></span></div>
+            <div class="mono muted truncate" id="scan-current" style="margin-top:6px"></div>
+          </div>
+          <h2 style="margin-top:22px">Recent detections</h2>
+          <div id="recent"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SCAN ================= -->
+    <section id="tab-scan" hidden>
+      <h1>Scan</h1>
+      <div class="grid cols-2">
+        <div class="card">
+          <h2>Custom scan</h2>
+          <div class="field">
+            <label class="title" for="custom-paths">Files or folders</label>
+            <textarea id="custom-paths" placeholder="/home/you/Downloads&#10;/media/usb-stick"></textarea>
+            <div class="hint">One path per line. Folders are scanned recursively; symlinks aren't followed.</div>
+          </div>
+          <button class="btn primary" id="custom-go">Start custom scan</button>
+        </div>
+        <div class="card">
+          <h2>How detection works</h2>
+          <ol class="muted" style="margin:0;padding-left:18px">
+            <li><b>Hash signatures</b>: the SHA-256 of a file is compared with known-bad lists in <code>signatures/*.hashes</code>.</li>
+            <li><b>Pattern rules</b>: byte or text patterns from <code>signatures/patterns.json</code>.</li>
+            <li><b>Heuristics</b>: scores suspicious traits such as double extensions, disguised or packed executables, obfuscated scripts and Office macros.</li>
+            <li><b>Archives</b>: the same checks run on each file inside a .zip.</li>
+            <li><b>ClamAV</b> (optional): a second opinion if ClamAV is installed.</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= QUARANTINE ================= -->
+    <section id="tab-quarantine" hidden>
+      <h1>Quarantine</h1>
+      <div class="card">
+        <p class="muted" style="margin-top:0">Quarantined files are moved into Sentinel's vault, scrambled and made non-executable, so they can't run. Restoring a file also adds its hash to the allowlist so it isn't flagged again.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>File</th><th>Threat</th><th>Quarantined</th><th>Size</th><th></th></tr></thead>
+          <tbody id="q-body"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ================= ACTIVITY ================= -->
+    <section id="tab-activity" hidden>
+      <h1>Activity</h1>
+      <div class="card">
+        <div class="row"><h2 style="margin:0">Detection history</h2><span class="spacer"></span><button class="btn sm" id="clear-history">Clear history</button></div>
+        <div class="table-wrap" style="margin-top:8px"><table>
+          <thead><tr><th>When</th><th>File</th><th>Threat</th><th>Engine</th><th>Action</th></tr></thead>
+          <tbody id="d-body"></tbody>
+        </table></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="row"><h2 style="margin:0">Event log</h2><span class="spacer"></span>
+          <select id="ev-filter" style="width:auto">
+            <option value="">All events</option><option value="threat">Threats</option>
+            <option value="warning">Warnings</option><option value="info">Info</option>
+          </select>
+        </div>
+        <div id="events" style="margin-top:8px"></div>
+      </div>
+    </section>
+
+    <!-- ================= SETTINGS ================= -->
+    <section id="tab-settings" hidden>
+      <h1>Settings</h1>
+      <form id="settings">
+        <div class="grid cols-2">
+          <div class="card">
+            <h2>Real-time protection</h2>
+            <div class="field row"><label class="switch"><input type="checkbox" name="realtime_enabled"><span></span></label> Watch folders for new or changed files</div>
+            <div class="field"><label class="title">Watched folders</label><textarea name="realtime_paths" data-list></textarea>
+              <div class="hint">One per line. Keep these focused: every file in them is checked each poll.</div></div>
+            <div class="field"><label class="title">Check interval (seconds)</label><input type="number" name="realtime_interval_sec" min="1" max="300"></div>
+          </div>
+
+          <div class="card">
+            <h2>Detection</h2>
+            <div class="field row"><label class="switch"><input type="checkbox" name="heuristics_enabled"><span></span></label> Heuristic analysis</div>
+            <div class="field"><label class="title">Heuristic sensitivity</label>
+              <select name="heuristic_sensitivity">
+                <option value="low">Low: fewer false positives</option>
+                <option value="medium">Medium (recommended)</option>
+                <option value="high">High: catches more, more false positives</option>
+              </select></div>
+            <div class="field row"><label class="switch"><input type="checkbox" name="scan_archives"><span></span></label> Scan inside .zip archives</div>
+            <div class="field row"><label class="switch"><input type="checkbox" name="use_clamav" id="clam-toggle"><span></span></label> Use ClamAV engine <span class="badge info" id="clam-badge"></span></div>
+            <div class="field"><label class="title">Skip files larger than (MB)</label><input type="number" name="max_file_size_mb" min="1" max="2048"></div>
+            <div class="field"><label class="title">When a threat is found</label>
+              <select name="action_on_detect">
+                <option value="quarantine">Quarantine automatically</option>
+                <option value="report">Report only (leave the file in place)</option>
+              </select></div>
+          </div>
+
+          <div class="card">
+            <h2>Scan locations</h2>
+            <div class="field"><label class="title">Quick scan</label><textarea name="quick_scan_paths" data-list></textarea></div>
+            <div class="field"><label class="title">Full scan</label><textarea name="full_scan_paths" data-list></textarea></div>
+          </div>
+
+          <div class="card">
+            <h2>Scheduled scans</h2>
+            <div class="field row"><label class="switch"><input type="checkbox" name="scheduled_scan_enabled"><span></span></label> Run scans automatically</div>
+            <div class="field"><label class="title">Scan type</label>
+              <select name="scheduled_scan_type"><option value="quick">Quick</option><option value="full">Full</option></select></div>
+            <div class="field"><label class="title">Every (hours)</label><input type="number" name="scheduled_interval_hours" min="1" max="720"></div>
+            <div class="hint" id="next-run"></div>
+          </div>
+
+          <div class="card">
+            <h2>Exclusions</h2>
+            <div class="field"><label class="title">Excluded folders</label><textarea name="exclude_paths" data-list></textarea></div>
+            <div class="field"><label class="title">Excluded extensions</label><textarea name="exclude_extensions" data-list></textarea></div>
+            <div class="field"><label class="title">Allowlisted SHA-256 hashes</label><textarea name="allowlist_hashes" data-list></textarea>
+              <div class="hint">Files with these hashes are never flagged.</div></div>
+          </div>
+
+          <div class="card">
+            <h2>Signatures</h2>
+            <p class="muted" style="margin-top:0" id="sig-info"></p>
+            <p class="muted">Add hash lists as <code>signatures/*.hashes</code> (one SHA-256 per line, optional name after it) and pattern rules in <code>signatures/patterns.json</code>, then reload. You don't need to restart.</p>
+            <button type="button" class="btn" id="sig-reload">Reload signatures</button>
+          </div>
+        </div>
+        <div class="savebar">
+          <button type="button" class="btn" id="settings-reset">Discard changes</button>
+          <button type="submit" class="btn primary">Save settings</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ------------------------------------------------------------------ *
+ * Small helpers
+ * ------------------------------------------------------------------ */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+// Every string from the server goes through esc() before reaching innerHTML.
+// File names are attacker-controlled (a file can be named "<img onerror=...>"),
+// so skipping this would let a malicious file run script in the dashboard.
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleString() : "never";
+const fmtNum = n => Number(n || 0).toLocaleString();
+const fmtSize = b => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`;
+const fmtDur = s => s < 60 ? `${Math.round(s)}s` : `${Math.floor(s/60)}m ${Math.round(s%60)}s`;
+function ago(ts) {
+  const s = Date.now() / 1000 - ts;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s/60)} min ago`;
+  if (s < 86400) return `${Math.floor(s/3600)} h ago`;
+  return `${Math.floor(s/86400)} d ago`;
+}
+
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove("show"), 2800);
+}
+
+// All API calls go through here. POSTs carry the X-Sentinel header that the
+// server requires (blocks cross-site requests, see sentinel.py).
+async function api(path, body) {
+  const opts = body === undefined ? {} : {
+    method: "POST",
+    headers: {"Content-Type": "application/json", "X-Sentinel": "1"},
+    body: JSON.stringify(body),
+  };
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || data.error || res.statusText);
+  return data;
+}
+
+/* ------------------------------------------------------------------ *
+ * Tabs
+ * ------------------------------------------------------------------ */
+let currentTab = "dashboard";
+$$("nav button").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+function showTab(name) {
+  currentTab = name;
+  $$("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  $$("main > section").forEach(s => s.hidden = s.id !== `tab-${name}`);
+  if (name === "settings") loadSettings();
+  refreshTab();
+}
+
+/* ------------------------------------------------------------------ *
+ * Dashboard
+ * ------------------------------------------------------------------ */
+const MODULES = [
+  {key: "realtime", cfg: "realtime_enabled", name: "Real-time protection", desc: "Scans new and changed files in watched folders"},
+  {key: "heuristics", cfg: "heuristics_enabled", name: "Heuristic analysis", desc: "Flags suspicious traits in unknown files"},
+  {key: "archives", cfg: "scan_archives", name: "Archive scanning", desc: "Looks inside .zip files"},
+  {key: "scheduled", cfg: "scheduled_scan_enabled", name: "Scheduled scans", desc: "Runs scans automatically"},
+  {key: "clamav", cfg: "use_clamav", name: "ClamAV engine", desc: "Optional second engine (must be installed)"},
+];
+
+let lastStatus = null;
+
+function renderStatus(st) {
+  lastStatus = st;
+  const p = st.protection;
+
+  // Hero: overall health.
+  const hero = $("#hero");
+  const threatsQueued = st.stats.quarantined;
+  let cls, title, sub;
+  if (!p.realtime) {
+    cls = "bad"; title = "Real-time protection is off";
+    sub = "New files aren't being checked. Turn it on to stay protected.";
+  } else if (!st.stats.last_scan) {
+    cls = "warn"; title = "Protected, but no scan has run yet";
+    sub = "Run a quick scan to check the files you already have.";
+  } else {
+    cls = "ok"; title = "You're protected";
+    sub = `Watching ${st.realtime_paths.length} folder(s). Last scan ${ago(st.stats.last_scan.finished)}.`;
+  }
+  if (threatsQueued) sub += ` ${threatsQueued} item(s) in quarantine.`;
+  hero.className = `card hero ${cls}`;
+  $("#hero-title").textContent = title;
+  $("#hero-sub").textContent = sub;
+  $("#hero-mark").setAttribute("d", cls === "ok" ? "m8.5 12 2.5 2.5 4.5-5" : "M12 8v4m0 4h.01");
+  $("#hero-fix").hidden = p.realtime;
+
+  // Stats.
+  $("#s-files").textContent = fmtNum(st.stats.files_scanned_total);
+  $("#s-threats").textContent = fmtNum(st.stats.threats_total);
+  $("#s-quar").textContent = fmtNum(st.stats.quarantined);
+  $("#s-sigs").textContent = fmtNum(st.signatures.hashes + st.signatures.patterns);
+  $("#nav-q").textContent = st.stats.quarantined;
+  $("#nav-q").className = `badge ${st.stats.quarantined ? "bad" : "info"}`;
+
+  // Module toggles (only re-render if something changed, so clicks aren't lost).
+  const sig = JSON.stringify([p, st.clamav_installed]);
+  if (renderStatus._mods !== sig) {
+    renderStatus._mods = sig;
+    $("#modules").innerHTML = MODULES.map(m => {
+      const disabled = m.key === "clamav" && !st.clamav_installed;
+      const on = p[m.key];
+      return `<div class="module">
+        <div class="spacer"><div class="name">${m.name} ${disabled ? '<span class="badge info">not installed</span>' : ""}</div>
+        <div class="desc">${m.desc}</div></div>
+        <span class="badge ${on ? "ok" : "info"}">${on ? "On" : "Off"}</span>
+        <label class="switch"><input type="checkbox" data-module="${m.cfg}" ${on ? "checked" : ""} ${disabled ? "disabled" : ""}><span></span></label>
+      </div>`;
+    }).join("");
+  }
+
+  // Scan card.
+  const sc = st.scan;
+  $("#scan-idle").hidden = sc.running;
+  $("#scan-running").hidden = !sc.running;
+  if (sc.running) {
+    $("#scan-title").textContent = `${sc.type[0].toUpperCase() + sc.type.slice(1)} scan in progress`;
+    $("#scan-files").textContent = `${fmtNum(sc.files)} files`;
+    $("#scan-threats").textContent = `${sc.threats} threat(s)`;
+    $("#scan-elapsed").textContent = fmtDur(Date.now() / 1000 - sc.started);
+    $("#scan-current").textContent = sc.current;
+  }
+  const ls = st.stats.last_scan;
+  $("#last-scan").textContent = ls ? `Last: ${ls.type}, ${fmtNum(ls.files)} files, ${ls.threats} threat(s)${ls.cancelled ? " (cancelled)" : ""}` : "";
+
+  // Settings-page bits that depend on status.
+  $("#clam-badge").textContent = st.clamav_installed ? "installed" : "not installed";
+  $("#clam-toggle").disabled = !st.clamav_installed;
+  $("#sig-info").textContent = `${fmtNum(st.signatures.hashes)} hash signature(s) and ${st.signatures.patterns} pattern rule(s), loaded ${fmtTime(st.signatures.loaded_at)}.`;
+  $("#next-run").textContent = st.next_scheduled ? `Next scheduled scan: ${fmtTime(st.next_scheduled)}` : "";
+}
+
+$("#modules").addEventListener("change", async e => {
+  const key = e.target.dataset.module;
+  if (!key) return;
+  await api("/api/config", {[key]: e.target.checked});
+  toast("Setting saved");
+  poll();
+});
+$("#hero-fix").addEventListener("click", async () => {
+  await api("/api/config", {realtime_enabled: true});
+  toast("Real-time protection turned on");
+  poll();
+});
+
+$$("[data-scan]").forEach(b => b.addEventListener("click", () => startScan(b.dataset.scan)));
+async function startScan(type, paths) {
+  try {
+    await api("/api/scan", {type, paths});
+    toast("Scan started");
+    if (currentTab !== "dashboard") showTab("dashboard");
+    poll();
+  } catch (e) { toast(e.message); }
+}
+$("#scan-cancel").addEventListener("click", async () => { await api("/api/scan/cancel", {}); toast("Cancelling…"); });
+$("#custom-go").addEventListener("click", () => {
+  const paths = $("#custom-paths").value.split("\n").map(s => s.trim()).filter(Boolean);
+  if (!paths.length) return toast("Enter at least one path");
+  startScan("custom", paths);
+});
+
+function detectionRow(d, compact) {
+  const actionCls = d.action === "quarantined" ? "ok" : d.action === "reported" ? "warn" : "bad";
+  const reasons = (d.reasons || []).map(r => `<li>${esc(r)}</li>`).join("");
+  if (compact) {
+    return `<div class="event"><span class="badge bad">${esc(d.engine)}</span>
+      <div class="spacer" style="min-width:0"><div><b>${esc(d.threat)}</b> <span class="badge ${actionCls}">${esc(d.action)}</span></div>
+      <div class="mono muted truncate" title="${esc(d.path)}">${esc(d.path)}</div></div>
+      <time>${ago(d.ts)}</time></div>`;
+  }
+  return `<tr>
+    <td class="muted">${fmtTime(d.ts)}</td>
+    <td class="path mono">${esc(d.path)}<details><summary>Details</summary><ul>${reasons}
+      <li>SHA-256: <span class="mono">${esc(d.sha256)}</span></li><li>Found by: ${esc(d.source)}</li></ul></details></td>
+    <td><b>${esc(d.threat)}</b>${d.score != null ? `<div class="muted">score ${d.score}</div>` : ""}</td>
+    <td>${esc(d.engine)}</td>
+    <td><span class="badge ${actionCls}">${esc(d.action)}</span></td></tr>`;
+}
+
+async function loadRecent() {
+  const dets = await api("/api/detections");
+  $("#recent").innerHTML = dets.length
+    ? dets.slice(0, 5).map(d => detectionRow(d, true)).join("")
+    : '<div class="empty">No threats detected</div>';
+}
+
+/* ------------------------------------------------------------------ *
+ * Quarantine
+ * ------------------------------------------------------------------ */
+async function loadQuarantine() {
+  const items = await api("/api/quarantine");
+  $("#q-body").innerHTML = items.length ? items.map(q => `<tr>
+      <td class="path mono">${esc(q.original_path)}<details><summary>Why</summary><ul>${(q.reasons || []).map(r => `<li>${esc(r)}</li>`).join("")}</ul></details></td>
+      <td><b>${esc(q.threat)}</b><div class="muted">${esc(q.engine)}</div></td>
+      <td class="muted">${fmtTime(q.ts)}</td>
+      <td class="muted">${fmtSize(q.size)}</td>
+      <td style="white-space:nowrap"><button class="btn sm" data-restore="${esc(q.id)}">Restore</button>
+          <button class="btn sm danger" data-delete="${esc(q.id)}">Delete</button></td></tr>`).join("")
+    : '<tr><td colspan="5" class="empty">Quarantine is empty</td></tr>';
+}
+$("#q-body").addEventListener("click", async e => {
+  const r = e.target.dataset.restore, d = e.target.dataset.delete;
+  try {
+    if (r && confirm("Restore this file to its original location?\nIts hash will be added to the allowlist so it isn't flagged again.")) {
+      toast((await api(`/api/quarantine/${r}/restore`, {allowlist: true})).message);
+    } else if (d && confirm("Permanently delete this file? This can't be undone.")) {
+      await api(`/api/quarantine/${d}/delete`, {});
+      toast("Deleted permanently");
+    } else return;
+  } catch (err) { toast(err.message); }
+  loadQuarantine(); poll();
+});
+
+/* ------------------------------------------------------------------ *
+ * Activity
+ * ------------------------------------------------------------------ */
+async function loadActivity() {
+  const [dets, events] = await Promise.all([api("/api/detections"), api("/api/events")]);
+  $("#d-body").innerHTML = dets.length ? dets.map(d => detectionRow(d, false)).join("")
+    : '<tr><td colspan="5" class="empty">No detections yet</td></tr>';
+  const filter = $("#ev-filter").value;
+  const shown = events.filter(e => !filter || e.level === filter);
+  const lvl = {threat: "bad", warning: "warn", info: "info"};
+  $("#events").innerHTML = shown.length ? shown.map(e => `<div class="event">
+      <time>${fmtTime(e.ts)}</time><span><span class="badge ${lvl[e.level] || "info"}">${esc(e.kind)}</span></span>
+      <span style="word-break:break-word">${esc(e.message)}</span></div>`).join("")
+    : '<div class="empty">No events</div>';
+}
+$("#ev-filter").addEventListener("change", loadActivity);
+$("#clear-history").addEventListener("click", async () => {
+  if (!confirm("Clear detection history? Quarantined files aren't affected.")) return;
+  await api("/api/detections/clear", {});
+  loadActivity();
+});
+
+/* ------------------------------------------------------------------ *
+ * Settings: the form fields' "name" attributes match config keys 1:1
+ * ------------------------------------------------------------------ */
+const form = $("#settings");
+async function loadSettings() {
+  const cfg = await api("/api/config");
+  for (const el of form.elements) {
+    if (!el.name || !(el.name in cfg)) continue;
+    const v = cfg[el.name];
+    if (el.type === "checkbox") el.checked = v;
+    else if (el.dataset.list !== undefined) el.value = v.join("\n");  // lists edit as one-per-line text
+    else el.value = v;
+  }
+}
+form.addEventListener("submit", async e => {
+  e.preventDefault();
+  const changes = {};
+  for (const el of form.elements) {
+    if (!el.name) continue;
+    if (el.type === "checkbox") changes[el.name] = el.checked;
+    else if (el.type === "number") changes[el.name] = Number(el.value);
+    else if (el.dataset.list !== undefined) changes[el.name] = el.value.split("\n").map(s => s.trim()).filter(Boolean);
+    else changes[el.name] = el.value;
+  }
+  await api("/api/config", changes);
+  await loadSettings();   // show the values as the server stored them (clamped/validated)
+  toast("Settings saved");
+  poll();
+});
+$("#settings-reset").addEventListener("click", () => { loadSettings(); toast("Changes discarded"); });
+$("#sig-reload").addEventListener("click", async () => {
+  const r = await api("/api/signatures/reload", {});
+  toast(`Loaded ${r.hashes} hashes and ${r.patterns} patterns`);
+  poll();
+});
+
+/* ------------------------------------------------------------------ *
+ * Polling loop: status every 1.5 s, the visible tab's lists every 5 s
+ * ------------------------------------------------------------------ */
+async function poll() {
+  try { renderStatus(await api("/api/status")); }
+  catch { $("#hero-title").textContent = "Can't reach Sentinel. Is it running?"; $("#hero").className = "card hero bad"; }
+}
+function refreshTab() {
+  if (currentTab === "dashboard") loadRecent();
+  if (currentTab === "quarantine") loadQuarantine();
+  if (currentTab === "activity") loadActivity();
+}
+poll(); refreshTab();
+setInterval(poll, 1500);
+setInterval(refreshTab, 5000);
+</script>
+</body>
+</html>

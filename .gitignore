@@ -1,0 +1,4 @@
+# Runtime data: config, logs, scan state and quarantined files. Private to each machine.
+data/
+__pycache__/
+*.pyc

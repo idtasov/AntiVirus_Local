@@ -1,0 +1,7 @@
+# Known-bad SHA-256 hashes, one per line, optionally followed by a threat name.
+# Add as many *.hashes files to this folder as you like (e.g. hash feeds you trust),
+# then click "Reload signatures" in Settings.
+#
+# The entry below matches the harmless file created by tools/make_test_files.py,
+# so you can check that hash detection works.
+da711f00e2d63bda86154f8157f1deccb3c02e0cd6c61e2c1de4984e8ffa866f  Sentinel.Test.HashSignature
